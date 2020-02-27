@@ -1,6 +1,8 @@
 import click
 import datetime
+import calendar
 import odoorpc
+import xmlrpc.client
 from dateutil import relativedelta
 from .helpers import format_timedelta
 from persistent import Persistent
@@ -8,11 +10,13 @@ from BTrees.IOBTree import IOBTree
 from BTrees.OOBTree import OOBTree
 from tabulate import tabulate
 from .timesheet import TimeSheet
+from .timesheet_alias import TimeSheetAlias
+from .helpers import apply_duration_string
 
 
 class TimesheetFileStore(Persistent):
     """
-    The "root" object that would store a bunch of Timesheet -objects.
+    The "root" object that would store a bunch of Timesheets.
     """
 
     def __init__(self):
@@ -24,10 +28,47 @@ class TimesheetFileStore(Persistent):
         self.current_running = None
         self.last_running = None
 
+        # Odoo connection details
+        self.odoo_protocol = "jsonrpc+ssl"
+        self.odoo_hostname = ""
+        self.odoo_port = 8069
+        self.odoo_database = ""
+        self.odoo_username = ""
+
     def _get_next_id(self):
         next_id = self.sequence_next_id
         self.sequence_next_id += 1
         return next_id
+
+    @staticmethod
+    def _split_index(index):
+        index_error = click.UsageError(
+            f"The index needs to be an integer, or two integers "
+            f"separated by a period '.'. Index received: {repr(index)}"
+        )
+
+        index_split = index.split('.')
+        if len(index_split) > 2:
+            raise index_error
+        elif len(index_split) == 1:
+            try:
+                date_offset = 0
+                task_index = int(index_split[0].strip())
+            except ValueError:
+                raise index_error
+        else:
+            date_offset_str, task_index_str = index_split
+            try:
+                date_offset = int(date_offset_str.strip())
+                task_index = int(task_index_str.strip())
+            except ValueError:
+                raise index_error
+
+        return date_offset, task_index
+
+    # ============================
+    # ===== Timesheet stuffs =====
+    # ============================
 
     def _add_timesheet(self, timesheet, date=datetime.date.today()):
         """
@@ -36,30 +77,56 @@ class TimesheetFileStore(Persistent):
         :param date: date to add timesheet to
         :return:
         """
-        ordinal_date = date.toordinal()
-        timesheets = self.timesheets.get(ordinal_date, [])
+        date_ordinal = date.toordinal()
+        timesheets = self.timesheets.get(date_ordinal, [])
 
         timesheet.id = self._get_next_id()
         timesheets.append(timesheet)
-        self.timesheets[ordinal_date] = timesheets
+        self.timesheets[date_ordinal] = timesheets
 
-    def add_timesheet(self, task_code="", description="", is_worktime=True, date=datetime.date.today()):
-        timesheet = TimeSheet(
-            task_code=task_code,
-            description=description,
-            is_worktime=is_worktime,
-        )
+    def add_timesheet(
+            self,
+            task_code="",
+            description="",
+            is_worktime=True,
+            date=datetime.date.today(),
+            duration=None):
+        """
+
+        :param task_code:
+        :param description:
+        :param is_worktime:
+        :param date:
+        :param duration:
+        :return:
+        """
+
+        # Check if the task code is an alias
+        if task_code and task_code in self.aliases:
+            timesheet = self.aliases[task_code].generate_timesheet()
+        else:
+            timesheet = TimeSheet(
+                task_code=task_code,
+                description=description,
+                is_worktime=is_worktime,
+            )
+        if duration is not None:
+            if not isinstance(duration, datetime.timedelta):
+                duration = apply_duration_string(duration)
+            timesheet.set_duration(duration)
+
         self._add_timesheet(timesheet, date=date)
         return timesheet
 
-    def add_and_start_timesheet(self, task_code="", description="", is_worktime=True):
-        timesheet = self.add_timesheet(task_code=task_code, description=description, is_worktime=is_worktime)
+    def add_and_start_timesheet(self, **kwargs):
+        timesheet = self.add_timesheet(**kwargs)
+
         if self.current_running:
             self.current_running.stop()
             self.last_running = self.current_running
 
-        self.current_running = timesheet
         timesheet.start()
+        self.current_running = timesheet
 
     def resume(self, index=None):
         """
@@ -89,9 +156,10 @@ class TimesheetFileStore(Persistent):
 
     def stop_running(self):
         if self.current_running:
-            # Making sure the `current_running` is actually running before attempting to stop it,
-            # just in case we somehow stopped the timesheet but left it as `current_running`
             if self.current_running.is_running():
+                # Making sure the `current_running` is actually running before attempting to
+                # stop it, just in case we somehow stopped the timesheet but left it
+                # as `current_running`
                 self.current_running.stop()
 
             self.last_running = self.current_running
@@ -104,6 +172,8 @@ class TimesheetFileStore(Persistent):
             timesheet.description = description
             edited = True
         if duration is not None:
+            if not isinstance(duration, datetime.timedelta):
+                duration = apply_duration_string(duration, base_duration=timesheet.duration)
             timesheet.set_duration(duration)
             edited = True
         if task_code is not None:
@@ -118,36 +188,13 @@ class TimesheetFileStore(Persistent):
 
         return edited
 
-    @staticmethod
-    def _split_index(index):
-        index_error = click.UsageError(
-            f"The index needs to be an integer, or two integers "
-            f"separated by a period '.'. Index received: {repr(index)}"
-        )
-
-        index_split = index.split('.')
-        if len(index_split) > 2:
-            raise index_error
-        elif len(index_split) == 1:
-            try:
-                date_offset = 0
-                task_index = int(index_split[0].strip())
-            except ValueError:
-                raise index_error
-        else:
-            date_offset_str, task_index_str = index_split
-            try:
-                date_offset = int(date_offset_str.strip())
-                task_index = int(task_index_str.strip())
-            except ValueError:
-                raise index_error
-
-        return date_offset, task_index
-
     def get_timesheet_by_index(self, index):
         """
-        index of a timesheet or optionally date offset and index
-         separated by a period ('.')
+        index of a timesheet or optionally negative date offset and an index
+         separated by a period ('.').
+
+        Index "2" => timesheets at index 1 for today (no offset). This is same as "0.2"
+        Index "1.2" => Yesterday's (today - date offset of 1) timesheets at index 2
         :param index: string
         :return: timesheet matching the index
         """
@@ -189,7 +236,7 @@ class TimesheetFileStore(Persistent):
         timesheets = self.timesheets.get(timesheet_ordinal, [])
         timesheet = timesheets.pop(timesheet_index)
         self.timesheets[timesheet_ordinal] = timesheets
-        click.echo("Dropped timesheet {}".format(repr(timesheet)))
+        click.echo(f"Dropped timesheet {repr(timesheet)}")
 
     def print_date(self, date=None):
         if date is None:
@@ -197,17 +244,19 @@ class TimesheetFileStore(Persistent):
 
         date_ordinal = date.toordinal()
         timesheets_today = self.timesheets.get(date_ordinal, [])
-        click.secho("Timesheets for {}".format(date.isoformat()), fg='green', bold=True)
+        weekday = calendar.day_name[date.weekday()]
 
         headers = ["Task Code", "Description", "Duration"]
         table = [
             [ts.task_code or "", ts.description or "", ts.get_formatted_duration(show_running=True)]
             for ts in timesheets_today]
-        click.echo(tabulate(table, headers=headers, showindex='always'))
 
         worktime_sheets = [ts for ts in timesheets_today if ts.is_worktime]
         total_duration = self.count_total_duration(worktime_sheets)
-        click.echo("Total Work Time: {}".format(format_timedelta(total_duration)))
+
+        click.secho(f"Timesheets for {date.isoformat()}, ({weekday})", fg='green', bold=True)
+        click.echo(tabulate(table, headers=headers, showindex='always'))
+        click.echo(f"Total Work Time: {format_timedelta(total_duration)}")
 
     @staticmethod
     def count_total_duration(timesheets):
@@ -216,3 +265,166 @@ class TimesheetFileStore(Persistent):
             total_duration += ts.get_duration()
 
         return total_duration
+
+    # ============================
+    # =====     Aliases     ======
+    # ============================
+
+    def add_alias(self, name, task_code="", description="", project_id=None, task_id=None):
+        new_alias = TimeSheetAlias(
+            name,
+            task_code=task_code,
+            description=description,
+            project_id=project_id,
+            task_id=task_id,
+        )
+        self.aliases[name] = new_alias
+        click.echo(f"Alias {name} added.")
+
+    def print_aliases(self, include_details=False):
+        attributes = [
+            ("Alias", "name"),
+            ("Task Code", "task_code"),
+            ("Description", "description"),
+            ("Title", "task_title"),
+            ("Project", "project_title"),
+        ]
+        details = [
+            ("Project id", "project_id"),
+            ("Task id", "task_id")
+        ]
+        if include_details:
+            attributes.extend(details)
+
+        aliases = self.aliases.values()
+        headers = [a[0] for a in attributes]
+
+        table = [
+            [getattr(alias, a[1]) for a in attributes] for alias in aliases
+        ]
+
+        click.echo(tabulate(table, headers=headers))
+
+    # ============================
+    # ===== Odoo connection ======
+    # ============================
+
+    def _get_odoo_session_name(self):
+        return f"ots_{self.odoo_hostname}_{self.odoo_port}_{self.odoo_protocol}_{self.odoo_database}_{self.odoo_username}"
+
+    def set_odoo_connection_details(self, protocol, hostname, port, database, username):
+        self.odoo_protocol = protocol
+        self.odoo_hostname = hostname
+        self.odoo_port = port
+        self.odoo_database = database
+        self.odoo_username = username
+
+    def login(self, username, password, *, hostname, port=8069, ssl=True, database=None, save=True):
+        """
+
+        :param username:
+        :param password:
+        :param hostname:
+        :param port:
+        :param ssl:
+        :param database:
+        :param save:
+        :return:
+        """
+        # xmlrpc seems to work with just this basic stuff, logged in just fine
+        protocol = 'https' if ssl else 'http'
+        common = xmlrpc.client.ServerProxy(f"{protocol}://{hostname}/xmlrpc/2/common")
+        user_id = common.authenticate(database, username, password, {})
+
+        # TODO: Would be absolutely lovely to get odoorpc working, but for some reason
+        #  it just doesn't.
+        # protocol = "jsonrpc+ssl" if ssl else "jsonrpc"
+        # odoo = odoorpc.ODOO(hostname, protocol=protocol, timeout=60, port=port, version="11.0")
+        #
+        # if database is None:
+        #     click.echo("Trying to decide the database.")
+        #     databases = odoo.db.list()
+        #     if not databases:
+        #         raise click.ClickException(
+        #             "No compatible databases found on target Odoo. "
+        #             "Either there are no compatible databases, or database listing is turned off. "
+        #             "Configure the database name if one is supposed to exist."
+        #         )
+        #     if len(databases) > 1:
+        #         raise click.ClickException(
+        #             "More than one compatible database found on target Odoo. "
+        #             f"Please configure the correct database. Compatible databases: {databases}"
+        #         )
+        #     else:
+        #         database = databases[0]
+        #         click.echo(f"Attempting to connecto to database {database}")
+        #
+        # odoo.login(database, username, password)
+        # user_id = odoo.env.user.id
+        # if save:
+        #     self.set_odoo_connection_details(
+        #         protocol=protocol,
+        #         hostname=hostname,
+        #         port=port,
+        #         database=database,
+        #         username=username,
+        #     )
+        #     odoo.save(self._get_odoo_session_name())
+
+        return user_id
+
+    def logout(self):
+        odoorpc.ODOO.remove(self._get_odoo_session_name())
+
+    def load_odoo_session(self):
+        return odoorpc.ODOO.load(self._get_odoo_session_name())
+
+    def is_session_stored(self):
+        return self._get_odoo_session_name() in odoorpc.ODOO.list()
+
+    def print_odoo_search_results(self, search_term):
+        raise NotImplementedError()
+
+    def _odoo_search_task(self, search_term):
+        """
+        For now this is just a basic search that searches for a task or project based on a string
+        :param search_term:
+        :return:
+        """
+        # TODO: This is making a lot of assumptions atm. If we have no project installed,
+        #  or if there is no code field, this'll just explode.
+        if not search_term:
+            raise click.ClickException("I need a search term.")
+
+        result = {}
+        odoo = self.load_odoo_session()
+
+        # ==== Search direct match by task code
+        project_model = odoo.env['project.project']
+        task_model = odoo.env['project.task']
+        task_ids = task_model.search([('code', '=', search_term)], limit=1)
+        project_ids = []
+        if not task_ids:
+            # We found no exact match, search for tasks or projects matching the search term
+            task_ids = task_model.search([('name', '=', search_term)])
+            project_ids = project_model.search([('name', '=', search_term)])
+
+        result['task_ids'] = task_ids
+        result['project_ids'] = project_ids
+        return result
+
+    def odoo_search_task(self, search_term):
+        odoo = self.load_odoo_session()
+        search_results = self._odoo_search_task(search_term)
+        project_ids = search_results.get('project_ids', [])
+        task_ids = search_results.get('task_ids', [])
+        # TODO: read fields
+        print(project_ids, task_ids)
+        if task_ids:
+            task_fields = [
+                "name",
+                "code",
+                "project_id",
+            ]
+            task_vals = odoo.env['project.task'].browse(task_ids).read(task_fields)
+            print(task_vals)

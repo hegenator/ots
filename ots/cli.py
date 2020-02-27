@@ -7,12 +7,11 @@ from pathlib import Path
 from dateutil import parser, relativedelta
 from ZODB import DB, FileStorage
 
-# TODO: Get filesheet_filestore.py working and use that instead
-from .timesheet import TimesheetFileStore
+from .timesheet_filestore import TimesheetFileStore
 
 
 OTS_PATH = str(Path.home() / '.ots')
-OTS_FILESTORE_FILE_NAME = 'filestore.fs'
+DEFAULT_FILESTORE_FILE_NAME = 'filestore.fs'
 
 
 def _load_config(path=OTS_PATH):
@@ -49,12 +48,15 @@ def _get_database(obj):
 def cli(ctx):
     """ Simple tool to record your time usage and send it to Odoo. """
 
-    if os.name != 'posix':  # TODO: This should probably just be a setting on setup.py
+    os_name = os.name
+    if os_name != 'posix':  # TODO: This should probably just be a setting on setup.py
         raise click.ClickException(
-            "Unexpected operating system. Expected 'posix' got {}".format(os.name))
+            f"Unexpected operating system. Expected 'posix' got {os_name}."
+        )
 
-    # TODO: Use the proper filestore
-    file_storage = FileStorage.FileStorage(str(Path(OTS_PATH) / 'tempstore.fs'))
+    config = _load_config()
+    filestore_file_name = config.get('filestore', DEFAULT_FILESTORE_FILE_NAME)
+    file_storage = FileStorage.FileStorage(str(Path(OTS_PATH) / filestore_file_name))
     db = DB(file_storage)
     with db.transaction() as connection:
         if not hasattr(connection.root, 'timesheet_storage'):
@@ -66,26 +68,29 @@ def cli(ctx):
     # Database and config to context for sub commands
     ctx.ensure_object(dict)
     ctx.obj['db'] = db
-    ctx.obj['config'] = _load_config()
+    ctx.obj['config'] = config
 
 
 @cli.command()
 @click.pass_obj
 @click.argument('task_code', default="")
-@click.option('-d', 'duration', type=click.types.FLOAT, help="Duration of the timesheet entry in hours.")
+@click.option('-d', 'duration',
+              help="Duration of the timesheet entry in format HH:mm.")
 @click.option('-m', 'description', help="Timesheet description.")
-@click.option('--date', type=click.types.DateTime(), help="Date to add the timesheet to, if other than today.")
+@click.option('--date', type=click.types.DateTime(formats=['%Y-%m-%d']), help="Date to add the timesheet to, if other than today.")
 def add(obj, task_code, duration, description, date):
-    # TODO: Giving duration as a float for hours is clumsy and annoying.
     db = _get_database(obj)
     if date is None:
         date = datetime.date.today()
     with db.transaction() as connection:
         timesheet_storage = connection.root.timesheet_storage
-        timesheet = timesheet_storage.add_timesheet(task_code=task_code, description=description, date=date)
-        if duration is not None:
-            duration_timedelta = datetime.timedelta(hours=duration)
-            timesheet.set_duration(duration_timedelta)
+
+        timesheet_storage.add_timesheet(
+            task_code=task_code,
+            description=description,
+            date=date,
+            duration=duration,
+        )
 
 
 @cli.command()
@@ -116,20 +121,21 @@ def stop(obj):
 @click.pass_obj
 @click.argument('index')
 @click.option('-m', 'description', required=False)
-@click.option('-d', 'duration', help="Duration in hours.", type=click.types.FLOAT)
+@click.option('-d', 'duration',
+              help="Duration of the timesheet entry in format HH:mm. Add +/- at the start to "
+                   "increased/decrease the current duration instead.")
 @click.option('-c', '--code', help="Task Code")
 @click.option('-t', '--task_id', type=click.types.INT)
 @click.option('-p', '--project_id', type=click.types.INT)
 def edit(obj, index, description, duration, code, task_id, project_id):
     db = _get_database(obj)
-    duration_timedelta = datetime.timedelta(hours=duration) if duration is not None else None
 
     with db.transaction() as connection:
         timesheet_storage = connection.root.timesheet_storage
         timesheet_edited = timesheet_storage.edit_timesheet(
             index,
             description=description,
-            duration=duration_timedelta,
+            duration=duration,
             task_code=code,
             task_id=task_id,
             project_id=project_id,
@@ -161,7 +167,7 @@ def drop(obj, index, force):
 @click.pass_obj
 def lunch(obj):
     """
-    Starts a lunch timesheet. This timesheet will not be considered workt ime, and will not
+    Starts a lunch timesheet. This timesheet will not be considered work time, and will not
     be synced to Odoo.
     """
     db = _get_database(obj)
@@ -181,21 +187,48 @@ def resume(obj, index):
 
 
 @cli.command()
+@click.argument('name', required=False)
+@click.argument('task_code', required=False)
+@click.option('-m', 'description')
+@click.option('--project_id', type=int, help="Odoo database ID of a project.")
+@click.option('--task_id', type=int, help="Odoo database ID of a task.")
+@click.pass_obj
+def alias(obj, name, task_code, description, project_id, task_id):
+    db = _get_database(obj)
+    with db.transaction() as connection:
+        timesheet_storage = connection.root.timesheet_storage
+        if name:
+            timesheet_storage.add_alias(
+                name,
+                task_code=task_code,
+                description=description,
+                project_id=project_id,
+                task_id=task_id,
+            )
+        else:
+            timesheet_storage.print_aliases()
+
+
+@cli.command()
 @click.pass_obj
 def sync(obj):
     """ Synchronise the timesheets with Odoo. """
     raise NotImplementedError("Not done, sry.")
 
 
-@cli.command('task-search')
+@cli.command('search')
+@click.argument('search_term')
 @click.pass_obj
-def search(obj):
-    """ Searches for a task. Not sure how it does that yet, though."""
-    click.echo("This is where I would print out stuff I maybe found.")
-    raise NotImplementedError("Nope")
+def search(obj, search_term):
+    """ Searches for a task. """
     # TODO: Search a matching ID, matching code or matching name
     #  For every search prints findings separately (or in a table).
     #  If nothing was found, just print some sort of a "nothing found"
+    db = _get_database(obj)
+    with db.transaction() as connection:
+        timesheet_storage = connection.root.timesheet_storage
+        matches = timesheet_storage.odoo_search(search_term)
+        click.echo(matches)
 
 
 @cli.command('list')
@@ -204,8 +237,8 @@ def search(obj):
 @click.pass_obj
 def list_timesheets(obj, days, date):
     """
-    lists all timesheets for a given number of days starting from a given date.
-    Defaults to just today.
+    Lists all timesheets for a given number of days, starting from a given date.
+    If date not given, defaults to today.
 
     DAYS: number of days to print, default 1
     """
@@ -224,47 +257,93 @@ def list_timesheets(obj, days, date):
 
 @cli.command()
 @click.pass_obj
-def setup(obj):
+@click.option('--database', help="Database to connect to.")
+def login(obj, database):
+    db = _get_database(obj)
+    config = obj.get('config', {})
+
+    default_hostname = config.get('odoo_hostname')
+    default_username = config.get('odoo_login')
+    default_ssl = config.get('ssl', True)
+    default_port = config.get('odoo_port', 8069)
+
+    hostname = click.prompt("Odoo's hostname e.g. 'mycompany.odoo.com'", default=default_hostname)
+    username = click.prompt("Username", default=default_username)
+    ssl = click.confirm("SSL?", default=default_ssl)
+    port = click.prompt("Port", default=default_port)
+
+    # Password prompt without echoing the password
+    password = click.prompt("Password", hide_input=True)
+    config.update({
+        'odoo_hostname': hostname,
+        'odoo_login': username,
+        'ssl': ssl,
+        'odoo_port': port,
+        'odoo_db': database
+    })
+    _save_config(config)
+
+    with db.transaction() as connection:
+        timesheet_storage = connection.root.timesheet_storage
+        user_id = timesheet_storage.login(
+            username,
+            password,
+            hostname=hostname,
+            ssl=ssl,
+            port=port,
+            database=database,
+            save=True,
+        )
+
+        click.echo(f"Successfully logged in as uid {user_id}.")
+
+
+@cli.command()
+@click.pass_obj
+def logout(obj):
+    db = _get_database(obj)
+    with db.transaction() as connection:
+        timesheet_storage = connection.root.timesheet_storage
+        timesheet_storage.logout()
+        click.echo("Session removed.")
+
+
+@cli.command()
+@click.option('-a', '--advanced', is_flag=True,
+              help="Run a full config, including more advanced options.")
+@click.pass_obj
+def setup(obj, advanced):
     config = obj.get('config', {})
     # DEFAULTS
     # Database connection related values
-    default_host = config.get('host')
-    default_db = config.get('db')
-    default_username = config.get('username')
+    default_host = config.get('odoo_hostname')
+    default_filestore = config.get('filestore', DEFAULT_FILESTORE_FILE_NAME)
+    ssl = config.get('ssl', True)
 
     # Preferences
-    default_auto_sync = config.get('auto_sync')
+    # default_auto_sync = config.get('auto_sync')
 
     # Prompt for new values
     host = click.prompt("Odoo host to connect to", default=default_host)
-    db = click.prompt("Database to connect to", default=default_db)
-    username = click.prompt("Odoo username", default=default_username)
-    # Password prompt without echoing it
-    password = getpass.getpass("Odoo password (leave empty to not store)")
 
     automatic_sync = False
-    # TODO: Check out OdooRPC save/load methods for saving sessions
-    if password:
-        automatic_sync = click.confirm(
-            "Automatic sync? Do you want sync every time a timesheet "
-            "is stopped?", default=default_auto_sync)
 
-    # Test the values before storing them
-    # click.echo("Attempting to authenticate with the provided credentials.")
-    # common = xmlrpc.client.ServerProxy('{}/xmlrpc/2/common'.format(url))
-    # uid = common.authenticate(db, username, password, {})
-    # click.echo("Successfully authenticated as uid {}".format(uid))
-    #
-    # # Check and store Odoo version.
-    # version_info = common.version()
-    # server_version = version_info.get('server_serie')
-    # click.echo("Odoo server version {}".format(server_version))
-
-    config.update({
-        'host': host,
-        'db': db,
-        'username': username,
+    config_values = {
+        'odoo_hostname': host,
         'auto_sync': automatic_sync,
-    })
+    }
+    if advanced:
+        ssl = click.confirm("Use SSL for the connection?", default=True)
+        filestore = click.prompt(
+            "Name of the local filestore file that stores the Timesheets. "
+            "This can be used to have several separate local databases of timesheets.",
+            default=default_filestore,
+        )
+        if not filestore.endswith(".fs"):
+            filestore = f"{filestore}.fs"
 
+        config_values['filestore'] = filestore
+
+    config_values['ssl'] = ssl
+    config.update(config_values)
     _save_config(config)
