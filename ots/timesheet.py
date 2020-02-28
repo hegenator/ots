@@ -12,6 +12,7 @@ class TimeSheet(Persistent):
     # attributes since they were created before that attribute was introduced. Such attributes
     # should be added here with a default value.
     task_title = ""
+    project_title = ""
 
     def __init__(
             self,
@@ -20,6 +21,7 @@ class TimeSheet(Persistent):
             description="",
             task_code="",
             task_title="",
+            project_title="",
             duration=datetime.timedelta(),
             is_worktime=True):
         """
@@ -39,15 +41,16 @@ class TimeSheet(Persistent):
         self.task_id = task_id
         self.is_worktime = is_worktime
 
-        self.task_code = task_code
-        self.task_title = task_title
-        self.description = description
+        self.task_code = task_code or ""
+        self.task_title = task_title or ""
+        self.project_title = project_title or ""
+        self.description = description or ""
 
         self.start_time = None  # datetime.datetime
         self.duration = duration  # datetime.timedelta
         self.created = datetime.datetime.now()
 
-        self.username = None
+        self.username = None  # TODO: Don't remember what I was planning on using this for...
         self.employee_id = None  # Employee ID in Odoo
 
         # The filestore assigns a value for this once stored for the first time
@@ -94,6 +97,7 @@ class TimeSheet(Persistent):
     @staticmethod
     def odoo_search(config, task_code):
 
+        # TODO: This has been redone elsewhere. Remove etc.
         raise NotImplementedError("Stuff")
         hostname = config.get('url')
         port = config.get('port', 8069)

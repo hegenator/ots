@@ -2,13 +2,14 @@ import click
 import datetime
 import calendar
 import odoorpc
-import xmlrpc.client
+
 from dateutil import relativedelta
-from .helpers import format_timedelta
 from persistent import Persistent
 from BTrees.IOBTree import IOBTree
 from BTrees.OOBTree import OOBTree
 from tabulate import tabulate
+
+from .helpers import format_timedelta
 from .timesheet import TimeSheet
 from .timesheet_alias import TimeSheetAlias
 from .helpers import apply_duration_string
@@ -243,15 +244,21 @@ class TimesheetFileStore(Persistent):
             date = datetime.date.today()
 
         date_ordinal = date.toordinal()
-        timesheets_today = self.timesheets.get(date_ordinal, [])
+        timesheets_for_date = self.timesheets.get(date_ordinal, [])
         weekday = calendar.day_name[date.weekday()]
 
-        headers = ["Task Code", "Description", "Duration"]
+        headers = ["Project", "Task", "Description", "Duration"]
         table = [
-            [ts.task_code or "", ts.description or "", ts.get_formatted_duration(show_running=True)]
-            for ts in timesheets_today]
+            [
+                ts.project_title,
+                f"{ts.task_code} {ts.task_title[:50]}",
+                ts.description,
+                ts.get_formatted_duration(show_running=True)
+            ]
+            for ts in timesheets_for_date
+        ]
 
-        worktime_sheets = [ts for ts in timesheets_today if ts.is_worktime]
+        worktime_sheets = [ts for ts in timesheets_for_date if ts.is_worktime]
         total_duration = self.count_total_duration(worktime_sheets)
 
         click.secho(f"Timesheets for {date.isoformat()}, ({weekday})", fg='green', bold=True)
@@ -331,46 +338,41 @@ class TimesheetFileStore(Persistent):
         :param save:
         :return:
         """
-        # xmlrpc seems to work with just this basic stuff, logged in just fine
-        protocol = 'https' if ssl else 'http'
-        common = xmlrpc.client.ServerProxy(f"{protocol}://{hostname}/xmlrpc/2/common")
-        user_id = common.authenticate(database, username, password, {})
 
-        # TODO: Would be absolutely lovely to get odoorpc working, but for some reason
-        #  it just doesn't.
-        # protocol = "jsonrpc+ssl" if ssl else "jsonrpc"
-        # odoo = odoorpc.ODOO(hostname, protocol=protocol, timeout=60, port=port, version="11.0")
-        #
-        # if database is None:
-        #     click.echo("Trying to decide the database.")
-        #     databases = odoo.db.list()
-        #     if not databases:
-        #         raise click.ClickException(
-        #             "No compatible databases found on target Odoo. "
-        #             "Either there are no compatible databases, or database listing is turned off. "
-        #             "Configure the database name if one is supposed to exist."
-        #         )
-        #     if len(databases) > 1:
-        #         raise click.ClickException(
-        #             "More than one compatible database found on target Odoo. "
-        #             f"Please configure the correct database. Compatible databases: {databases}"
-        #         )
-        #     else:
-        #         database = databases[0]
-        #         click.echo(f"Attempting to connecto to database {database}")
-        #
-        # odoo.login(database, username, password)
-        # user_id = odoo.env.user.id
-        # if save:
-        #     self.set_odoo_connection_details(
-        #         protocol=protocol,
-        #         hostname=hostname,
-        #         port=port,
-        #         database=database,
-        #         username=username,
-        #     )
-        #     odoo.save(self._get_odoo_session_name())
+        protocol = "jsonrpc+ssl" if ssl else "jsonrpc"
+        odoo = odoorpc.ODOO(hostname, protocol=protocol, timeout=60, port=port, version="11.0")
 
+        if database is None:
+            click.echo("Trying to decide the database.")
+            databases = odoo.db.list()
+            if not databases:
+                raise click.ClickException(
+                    "No compatible databases found on target Odoo. "
+                    "Either there are no compatible databases, or database listing is turned off. "
+                    "Configure the database name if one is supposed to exist."
+                )
+            if len(databases) > 1:
+                raise click.ClickException(
+                    "More than one compatible database found on target Odoo. "
+                    f"Please configure the correct database. Compatible databases: {databases}"
+                )
+            else:
+                database = databases[0]
+                click.echo(f"Attempting to connect to database {database}")
+
+        odoo.login(database, username, password)
+        user_id = odoo.env.uid
+
+        if save:
+            self.set_odoo_connection_details(
+                protocol=protocol,
+                hostname=hostname,
+                port=port,
+                database=database,
+                username=username,
+            )
+            odoo.save(self._get_odoo_session_name())
+        print(f"Employee: {employee_id}")
         return user_id
 
     def logout(self):
@@ -385,7 +387,17 @@ class TimesheetFileStore(Persistent):
     def print_odoo_search_results(self, search_term):
         raise NotImplementedError()
 
-    def _odoo_search_task(self, search_term):
+    def _odoo_search_task_by_code(self, search_term):
+        if not search_term:
+            raise click.ClickException("Gief search term plz.")
+
+        odoo = self.load_odoo_session()
+        task_model = odoo.env['project.task']
+
+        task_ids = task_model.search([('code', '=', search_term)], limit=1)
+        return task_ids
+
+    def _odoo_search_tasks_and_projects(self, search_term):
         """
         For now this is just a basic search that searches for a task or project based on a string
         :param search_term:
@@ -398,16 +410,19 @@ class TimesheetFileStore(Persistent):
 
         result = {}
         odoo = self.load_odoo_session()
-
-        # ==== Search direct match by task code
-        project_model = odoo.env['project.project']
         task_model = odoo.env['project.task']
-        task_ids = task_model.search([('code', '=', search_term)], limit=1)
+        project_model = odoo.env['project.project']
+
+        # Search direct match by task code
+        task_ids = self._odoo_search_task_by_code(search_term)
         project_ids = []
         if not task_ids:
             # We found no exact match, search for tasks or projects matching the search term
-            task_ids = task_model.search([('name', '=', search_term)])
-            project_ids = project_model.search([('name', '=', search_term)])
+            task_ids = task_model.search(
+                [('name', 'ilike', search_term)],
+                order="project_id, code"  # TODO: Experimenting, possibly won't need customer order
+            )
+            project_ids = project_model.search([('name', 'ilike', search_term)])
 
         result['task_ids'] = task_ids
         result['project_ids'] = project_ids
@@ -415,16 +430,72 @@ class TimesheetFileStore(Persistent):
 
     def odoo_search_task(self, search_term):
         odoo = self.load_odoo_session()
-        search_results = self._odoo_search_task(search_term)
+        search_results = self._odoo_search_tasks_and_projects(search_term)
         project_ids = search_results.get('project_ids', [])
         task_ids = search_results.get('task_ids', [])
-        # TODO: read fields
-        print(project_ids, task_ids)
+
+        if not project_ids and not task_ids:
+            click.secho("No results found.", fg='yellow', bold=True)
+        else:
+            click.secho(f"Search results for \"{search_term}\"", fg='green', bold=True)
+
         if task_ids:
+            # read always returns id, even if we don't ask for it, but we use it as a header
+            # so simpler to include it here and reuse the fields-list as the table headers
             task_fields = [
-                "name",
                 "code",
+                "name",
                 "project_id",
+                "stage_id",
+                "id",
             ]
             task_vals = odoo.env['project.task'].browse(task_ids).read(task_fields)
-            print(task_vals)
+            click.secho("Tasks:", fg='green', bold=True)
+            task_headers = task_fields
+            table = [
+                [data[field] for field in task_headers] for data in task_vals
+            ]
+
+            click.echo(tabulate(table, headers=task_headers))
+            
+        if project_ids:
+            project_fields = [
+                "name",
+                "id",
+            ]
+            project_vals = odoo.env['project.project'].browse(project_ids).read(project_fields)
+            click.secho("Projects:", fg='green', bold=True)
+            project_headers = project_fields
+            table = [
+                [data[field] for field in project_headers] for data in project_vals
+            ]
+
+            click.echo(tabulate(table, headers=project_headers))
+
+    def update_timesheet_odoo_data(self, index):
+        # TODO: Create a mass-update version with date-ranges or something.
+        timesheet = self.get_timesheet_by_index(index)
+        odoo = self.load_odoo_session()
+
+        task_code = timesheet.task_code
+        if task_code:
+            task_id = self._odoo_search_task_by_code(task_code)
+            if task_id:
+                task = odoo.env['project.task'].browse(task_id)
+                # read returns a list, but only one task so extract the dict
+                task_vals = task.read(["project_id", "name"])[0]
+                print(task_vals)
+
+                timesheet.task_id = task_vals.get("id")
+                timesheet.task_title = task_vals.get("name", "")
+
+                project_id, project_title = task_vals.get("project_id", (None, ""))
+                timesheet.project_id = project_id
+                timesheet.project_title = project_title
+        else:
+            # TODO: Later, we would like to upgrade some information on the timesheet
+            #  even though we didn't have the task code, if we have task_id or project_id instead
+            click.echo("Timesheet has no task code, information not updated.")
+
+        employee_id = odoo.env['hr.employee'].search([('user_id', '=', odoo.env.uid)], limit=1)
+        timesheet.employee_id = employee_id[0] if employee_id else None
