@@ -227,8 +227,7 @@ def search(obj, search_term):
     db = _get_database(obj)
     with db.transaction() as connection:
         timesheet_storage = connection.root.timesheet_storage
-        matches = timesheet_storage.odoo_search(search_term)
-        click.echo(matches)
+        timesheet_storage.odoo_search_task(search_term)
 
 
 @cli.command('list')
@@ -265,11 +264,12 @@ def login(obj, database):
     default_hostname = config.get('odoo_hostname')
     default_username = config.get('odoo_login')
     default_ssl = config.get('ssl', True)
-    default_port = config.get('odoo_port', 8069)
 
     hostname = click.prompt("Odoo's hostname e.g. 'mycompany.odoo.com'", default=default_hostname)
     username = click.prompt("Username", default=default_username)
     ssl = click.confirm("SSL?", default=default_ssl)
+
+    default_port = "443" if ssl else "80"
     port = click.prompt("Port", default=default_port)
 
     # Password prompt without echoing the password
@@ -279,7 +279,7 @@ def login(obj, database):
         'odoo_login': username,
         'ssl': ssl,
         'odoo_port': port,
-        'odoo_db': database
+        'odoo_db': database,
     })
     _save_config(config)
 
@@ -347,3 +347,13 @@ def setup(obj, advanced):
     config_values['ssl'] = ssl
     config.update(config_values)
     _save_config(config)
+
+
+@cli.command()
+@click.argument('index')
+@click.pass_obj
+def update(obj, index):
+    db = _get_database(obj)
+    with db.transaction() as connection:
+        timesheet_storage = connection.root.timesheet_storage
+        timesheet_storage.update_timesheet_odoo_data(index)
