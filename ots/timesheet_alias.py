@@ -12,6 +12,8 @@ class TimeSheetAlias(Persistent):
                  description="",
                  task_code="",
                  ):
+        # TODO: This shares quite some logic with a regular timesheet. We should probably have
+        #  some sort of abstract base version with common logic that can be inherited by both.
         """
         Stuff and shit
         :param project_id:
