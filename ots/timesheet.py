@@ -13,6 +13,7 @@ class TimeSheet(Persistent):
     # should be added here with a default value.
     task_title = ""
     project_title = ""
+    odoo_id = None
 
     def __init__(
             self,
@@ -55,6 +56,7 @@ class TimeSheet(Persistent):
 
         # The filestore assigns a value for this once stored for the first time
         self.id = None
+        self.odoo_id = None
 
     def __repr__(self):
         string_repr = ""
@@ -94,31 +96,26 @@ class TimeSheet(Persistent):
     def is_running(self):
         return bool(self.start_time)
 
-    @staticmethod
-    def odoo_search(config, task_code):
+    def odoo_push(self, odoo):
 
-        # TODO: This has been redone elsewhere. Remove etc.
-        raise NotImplementedError("Stuff")
-        hostname = config.get('url')
-        port = config.get('port', 8069)
+        timesheet_model = odoo.env['account.analytic.line']
+        timesheet_vals = self._get_odoo_timesheet_vals(round_duration=True)
 
-        odoo = odoorpc.ODOO(host=url, port=port, protocol='jsonrpc+ssl')
-        if 'project.task' not in odoo.env:
-            raise click.ClickException("The target Odoo doesn't have Project Task model available.")
+        # Things we don't want to push
+        if not self.is_worktime:
+            return
 
-        task_model = odoo.env['project.task']
-        task = Task.search([('code', '=', task_code)], limit=1)
+        if not self.project_id:
+            click.echo(f"Timesheet {repr(self)}, no project_id. Not pushing.")
+            return
 
-        # timesheet_vals = {
-        #     'project_id': 1,
-        #     'task_id': 1,
-        #     'employee_id': 1,
-        #     'unit_amount': 0.5,
-        #     'date': '2019-10-26',
-        # }
-
-        # new_timesheet = odoo.execute('account.analytic.line', 'create', timesheet_vals)
-        # click.echo(message=repr(new_timesheet))
+        if self.odoo_id:
+            odoo_timesheet = timesheet_model.browse(self.odoo_id)
+            odoo_timesheet.write(timesheet_vals)
+        else:
+            new_id = timesheet_model.create(timesheet_vals)
+            self.odoo_id = new_id
+            click.echo(f"New timesheet created with id {new_id}")
 
     def set_duration(self, duration):
         if self.is_running():
@@ -146,6 +143,25 @@ class TimeSheet(Persistent):
         if show_running and self.is_running():
             formatted_duration += " (running)"
         return formatted_duration
+
+    def _get_odoo_timesheet_vals(self, round_duration=False):
+        """
+        :param round_duration:
+        :return:
+        """
+
+        unit_amount = self.duration.total_seconds() / 3600
+        unit_amount = round(unit_amount, 2)  # Round to two decimals
+        if round_duration:
+            self.duration = datetime.timedelta(hours=unit_amount)
+
+        return {
+            'project_id': self.project_id,
+            'task_id': self.task_id,
+            'employee_id': self.employee_id,
+            'unit_amount': unit_amount,
+            'date': self.created.date().isoformat(),
+        }
 
     def copy(self):
         # TODO: Should we just construct our own copying later? What do we gain from doing that?

@@ -79,6 +79,11 @@ def cli(ctx):
 @click.option('-m', 'description', help="Timesheet description.")
 @click.option('--date', type=click.types.DateTime(formats=['%Y-%m-%d']), help="Date to add the timesheet to, if other than today.")
 def add(obj, task_code, duration, description, date):
+    """
+    Adds a timesheet entry without starting it. Task code is the task code
+    on the task in Odoo (field `code` in project.task). The task code is case
+    sensitive.
+    """
     db = _get_database(obj)
     if date is None:
         date = datetime.date.today()
@@ -128,6 +133,14 @@ def stop(obj):
 @click.option('-t', '--task_id', type=click.types.INT)
 @click.option('-p', '--project_id', type=click.types.INT)
 def edit(obj, index, description, duration, code, task_id, project_id):
+    """
+    Edit information on an existing timesheet.
+    Index is the index of the timesheet as shown by the command (ots list).
+    Optionally the index can be given as a combination of date offset and index
+    separated by a period ".", such that the date off set marks how many days
+    in the past the timesheet is. So, the index for the first timesheet for yesterday
+    would be in the format "1.0" (date offset 1, index 0).
+    """
     db = _get_database(obj)
 
     with db.transaction() as connection:
@@ -151,6 +164,14 @@ def edit(obj, index, description, duration, code, task_id, project_id):
 @click.argument('index')
 @click.option('-f', '--force')
 def drop(obj, index, force):
+    """
+    Drops a timesheet.
+    Index is the index of the timesheet as shown by the command (ots list).
+    Optionally the index can be given as a combination of date offset and index
+    separated by a period ".", such that the date off set marks how many days
+    in the past the timesheet is. So, the index for the first timesheet for yesterday
+    would be in the format "1.0" (date offset 1, index 0).
+    """
     db = _get_database(obj)
     if not force:
         drop_confirmed = click.confirm("Confirm dropping timesheet", default=False)
@@ -168,7 +189,9 @@ def drop(obj, index, force):
 def lunch(obj):
     """
     Starts a lunch timesheet. This timesheet will not be considered work time, and will not
-    be synced to Odoo.
+    be synced to Odoo. This is purely for you to track your lunch if you wish. Having the lunch
+    time recorded might help backtracking your work time for the day if you forget to start or stop
+    a timesheet and need to do detective work.
     """
     db = _get_database(obj)
     with db.transaction() as connection:
@@ -180,6 +203,15 @@ def lunch(obj):
 @click.argument('index', required=False)
 @click.pass_obj
 def resume(obj, index):
+    """
+    Resume a timesheet of the given index.
+
+    If no index is given, the previous timesheet that was running will be resumed. Also works if
+    you have a currently running timesheet, in which case the currently running timesheet will
+    be stopped and the previous one resumed.
+    Using this command multiple times in a row will cause you to alternate between
+    two timesheets.
+    """
     db = _get_database(obj)
     with db.transaction() as connection:
         timesheet_storage = connection.root.timesheet_storage
@@ -194,6 +226,18 @@ def resume(obj, index):
 @click.option('--task_id', type=int, help="Odoo database ID of a task.")
 @click.pass_obj
 def alias(obj, name, task_code, description, project_id, task_id):
+    """
+    Create an alias for a timesheet. Argument "name" is the name of the Alias,
+    using which you can later on create a timesheet by the alias.
+
+    If no arguments are given, a list of existing aliases will be printed.
+
+    Example usage:
+    Creating an alias for a task you start often: `ots alias emails T8217 -m "Emails"`
+
+    Using the alias
+    ots start emails >>> Will create a timesheet with task code T8217 and description "Emails"
+    """
     db = _get_database(obj)
     with db.transaction() as connection:
         timesheet_storage = connection.root.timesheet_storage
@@ -216,11 +260,46 @@ def sync(obj):
     raise NotImplementedError("Not done, sry.")
 
 
+@cli.command()
+@click.argument('index', required=False)
+@click.option('--date', type=click.types.DateTime(formats=['%Y-%m-%d']),
+              help="Date to push, if not today. YYYY-MM-DD")
+@click.option('-f', '--force', is_flag=True)
+@click.pass_obj
+def push(obj, index, date, force):
+    """
+    Push timesheets to Odoo. If no arguments or options are given,
+    all timesheets of today will be pushed. If an index is given, only that
+    one timesheet is pushed. If a date is given as an option, all timesheets
+    of that one day will be pushed.
+    """
+    if index and date:
+        click.UsageError(
+            "Give an index or a date, not both. If you want to push a single timesheet, "
+            "use an index. If you want to push an entire date, use a date instead.")
+
+    if not force:
+        to_be_pushed = index or date or datetime.date.today().isoformat()
+        if not click.confirm(f"Push {to_be_pushed}?"):
+            raise click.Abort()
+
+    db = _get_database(obj)
+    with db.transaction() as connection:
+        timesheet_storage = connection.root.timesheet_storage
+        timesheet_storage.push(index, date)
+
+
 @cli.command('search')
 @click.argument('search_term')
 @click.pass_obj
 def search(obj, search_term):
-    """ Searches for a task. """
+    """
+    Searches for a task in Odoo.
+    If a task code is given and a perfect match is found, only that one matching
+    task is shown as a result.
+    Otherwise a search is done for both tasks and projects based on their
+    named and the search term.
+    """
     # TODO: Search a matching ID, matching code or matching name
     #  For every search prints findings separately (or in a table).
     #  If nothing was found, just print some sort of a "nothing found"
@@ -258,6 +337,12 @@ def list_timesheets(obj, days, date):
 @click.pass_obj
 @click.option('--database', help="Database to connect to.")
 def login(obj, database):
+    """
+    Login to Odoo and save the session.
+    The saved session will be automatically used if available when making
+    any connections to Odoo.
+    To remove the session, use `ots logout`
+    """
     db = _get_database(obj)
     config = obj.get('config', {})
 
@@ -301,6 +386,9 @@ def login(obj, database):
 @cli.command()
 @click.pass_obj
 def logout(obj):
+    """
+    Log out of Odoo and remove the saved session.
+    """
     db = _get_database(obj)
     with db.transaction() as connection:
         timesheet_storage = connection.root.timesheet_storage
@@ -313,6 +401,9 @@ def logout(obj):
               help="Run a full config, including more advanced options.")
 @click.pass_obj
 def setup(obj, advanced):
+    """
+    Set up basic configurations.
+    """
     config = obj.get('config', {})
     # DEFAULTS
     # Database connection related values
@@ -353,6 +444,12 @@ def setup(obj, advanced):
 @click.argument('index')
 @click.pass_obj
 def update(obj, index):
+    """
+    Update the project/task information of a timesheet from Odoo.
+    This command only updates the project name / task name of a timesheet
+    based on their Task Code or project_id, this does not pull or push any
+    timesheet values to/from Odoo.
+    """
     db = _get_database(obj)
     with db.transaction() as connection:
         timesheet_storage = connection.root.timesheet_storage
