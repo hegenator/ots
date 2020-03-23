@@ -85,6 +85,19 @@ class TimesheetFileStore(Persistent):
         timesheets.append(timesheet)
         self.timesheets[date_ordinal] = timesheets
 
+        # attempt to update the timesheet, but don't explode even if it fails
+        if self.is_session_stored():
+            try:
+                self._update_timesheet_odoo_data(timesheet)
+            except Exception as e:  # TODO: Guess
+                # click.echo(e)
+                click.secho(
+                    "Something went wrong when trying to update data from Odoo.\n"
+                    f"{e}",
+                    fg='yellow',
+                    bold=True,
+                )
+
     def add_timesheet(
             self,
             task_code="",
@@ -117,6 +130,7 @@ class TimesheetFileStore(Persistent):
             timesheet.set_duration(duration)
 
         self._add_timesheet(timesheet, date=date)
+
         return timesheet
 
     def add_and_start_timesheet(self, **kwargs):
@@ -184,7 +198,10 @@ class TimesheetFileStore(Persistent):
             task_id_edited = timesheet.set_task_id(task_id)
             edited = edited or task_id_edited
         if project_id is not None:
-            project_id_edited = timesheet.set_project_id(project_id)
+            # TODO: What was the idea behind this?
+            # project_id_edited = timesheet.set_project_id(project_id)
+            timesheet.project_id = project_id
+            project_id_edited = True
             edited = edited or project_id_edited
 
         return edited
@@ -248,12 +265,20 @@ class TimesheetFileStore(Persistent):
         weekday = calendar.day_name[date.weekday()]
 
         headers = ["Project", "Task", "Description", "Duration"]
+
+        def get_coloured_duration(ts):
+            dur = ts.get_formatted_duration(show_running=True)
+            if ts.is_worktime:
+                colour = "green" if ts.odoo_id else "red"
+                dur = click.style(dur, fg=colour)
+            return dur
+
         table = [
             [
                 ts.project_title,
                 f"{ts.task_code} {ts.task_title[:50]}",
                 ts.description,
-                ts.get_formatted_duration(show_running=True)
+                get_coloured_duration(ts)
             ]
             for ts in timesheets_for_date
         ]
@@ -326,7 +351,7 @@ class TimesheetFileStore(Persistent):
         self.odoo_database = database
         self.odoo_username = username
 
-    def login(self, username, password, *, hostname, port=8069, ssl=True, database=None, save=True):
+    def login(self, username, password, *, hostname, port=443, ssl=True, database=None, save=True):
         """
 
         :param username:
@@ -340,7 +365,7 @@ class TimesheetFileStore(Persistent):
         """
 
         protocol = "jsonrpc+ssl" if ssl else "jsonrpc"
-        odoo = odoorpc.ODOO(hostname, protocol=protocol, timeout=60, port=port, version="11.0")
+        odoo = odoorpc.ODOO(hostname, protocol=protocol, timeout=60, port=port)
 
         if database is None:
             click.echo("Trying to decide the database.")
@@ -372,7 +397,6 @@ class TimesheetFileStore(Persistent):
                 username=username,
             )
             odoo.save(self._get_odoo_session_name())
-        print(f"Employee: {employee_id}")
         return user_id
 
     def logout(self):
@@ -383,6 +407,20 @@ class TimesheetFileStore(Persistent):
 
     def is_session_stored(self):
         return self._get_odoo_session_name() in odoorpc.ODOO.list()
+
+    def push(self, index, date):
+        if index:
+            timesheets = [self.get_timesheet_by_index(index)]
+        else:
+            if not date:
+                date = datetime.date.today()
+
+            date_ordinal = date.toordinal()
+            timesheets = self.timesheets.get(date_ordinal, [])
+
+        odoo = self.load_odoo_session()
+        for timesheet in timesheets:
+            timesheet.odoo_push(odoo)
 
     def print_odoo_search_results(self, search_term):
         raise NotImplementedError()
@@ -420,7 +458,7 @@ class TimesheetFileStore(Persistent):
             # We found no exact match, search for tasks or projects matching the search term
             task_ids = task_model.search(
                 [('name', 'ilike', search_term)],
-                order="project_id, code"  # TODO: Experimenting, possibly won't need customer order
+                order="project_id, id desc"  # TODO: Experimenting, possibly won't need customer order
             )
             project_ids = project_model.search([('name', 'ilike', search_term)])
 
@@ -439,6 +477,13 @@ class TimesheetFileStore(Persistent):
         else:
             click.secho(f"Search results for \"{search_term}\"", fg='green', bold=True)
 
+        def limit_length(value, max_len=50):
+            max_len = max(max_len, 3)
+            value = str(value)
+            if len(value) > max_len:
+                return f"{value[:max_len - 3]}..."
+            return value
+
         if task_ids:
             # read always returns id, even if we don't ask for it, but we use it as a header
             # so simpler to include it here and reuse the fields-list as the table headers
@@ -453,7 +498,10 @@ class TimesheetFileStore(Persistent):
             click.secho("Tasks:", fg='green', bold=True)
             task_headers = task_fields
             table = [
-                [data[field] for field in task_headers] for data in task_vals
+                [
+                    limit_length(data[field]) for field in task_headers
+                ]
+                for data in task_vals
             ]
 
             click.echo(tabulate(table, headers=task_headers))
@@ -467,14 +515,17 @@ class TimesheetFileStore(Persistent):
             click.secho("Projects:", fg='green', bold=True)
             project_headers = project_fields
             table = [
-                [data[field] for field in project_headers] for data in project_vals
+                [limit_length(data[field]) for field in project_headers] for data in project_vals
             ]
 
             click.echo(tabulate(table, headers=project_headers))
 
     def update_timesheet_odoo_data(self, index):
-        # TODO: Create a mass-update version with date-ranges or something.
         timesheet = self.get_timesheet_by_index(index)
+        # TODO: Create a mass-update version with date-ranges or something.
+        self._update_timesheet_odoo_data(timesheet)
+
+    def _update_timesheet_odoo_data(self, timesheet):
         odoo = self.load_odoo_session()
 
         task_code = timesheet.task_code
@@ -484,7 +535,6 @@ class TimesheetFileStore(Persistent):
                 task = odoo.env['project.task'].browse(task_id)
                 # read returns a list, but only one task so extract the dict
                 task_vals = task.read(["project_id", "name"])[0]
-                print(task_vals)
 
                 timesheet.task_id = task_vals.get("id")
                 timesheet.task_title = task_vals.get("name", "")
@@ -492,6 +542,10 @@ class TimesheetFileStore(Persistent):
                 project_id, project_title = task_vals.get("project_id", (None, ""))
                 timesheet.project_id = project_id
                 timesheet.project_title = project_title
+        elif timesheet.project_id:
+            project = odoo.env['project.project'].browse(timesheet.project_id)
+            timesheet.project_title = project.name
+
         else:
             # TODO: Later, we would like to upgrade some information on the timesheet
             #  even though we didn't have the task code, if we have task_id or project_id instead

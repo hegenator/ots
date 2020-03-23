@@ -51,4 +51,3 @@ def apply_duration_string(duration_str, base_duration=None):
         res_duration = parsed_duration
 
     return res_duration
-
