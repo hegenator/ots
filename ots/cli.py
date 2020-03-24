@@ -67,7 +67,13 @@ def cli(ctx):
 
     config = _load_config()
     filestore_file_name = config.get('filestore', DEFAULT_FILESTORE_FILE_NAME)
-    file_storage = FileStorage.FileStorage(str(Path(OTS_PATH) / filestore_file_name))
+
+    # Make sure the directory path for `.ots` exists.
+    ots_path = Path(OTS_PATH)
+    if not ots_path.exists():
+        ots_path.mkdir()
+
+    file_storage = FileStorage.FileStorage(str(ots_path / filestore_file_name))
     db = DB(file_storage)
     with db.transaction() as connection:
         if not hasattr(connection.root, 'timesheet_storage'):
