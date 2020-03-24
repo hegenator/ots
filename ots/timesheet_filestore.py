@@ -269,6 +269,8 @@ class TimesheetFileStore(Persistent):
         def get_coloured_duration(ts):
             dur = ts.get_formatted_duration(show_running=True)
             if ts.is_worktime:
+                # TODO: This doesn't care if the time has changed since last
+                #  push, so green is not always a sign of "good status"
                 colour = "green" if ts.odoo_id else "red"
                 dur = click.style(dur, fg=colour)
             return dur
