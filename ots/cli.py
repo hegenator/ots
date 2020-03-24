@@ -1,10 +1,11 @@
 import os
 import click
 import json
-import getpass
 import datetime
-from pathlib import Path
+
+from contextlib import contextmanager
 from dateutil import parser, relativedelta
+from pathlib import Path
 from ZODB import DB, FileStorage
 
 from .timesheet_filestore import TimesheetFileStore
@@ -43,11 +44,21 @@ def _get_database(obj):
     return db
 
 
+@contextmanager
+def ots_filestore(obj):
+    db = _get_database(obj)
+    with db.transaction() as connection:
+        timesheet_storage = connection.root.timesheet_storage
+        yield timesheet_storage
+
+
 @click.group()
 @click.pass_context
 def cli(ctx):
     """ Simple tool to record your time usage and send it to Odoo. """
 
+    # This is here because I haven't given the slightest thought to what
+    # the file system should look like on a Windows machine.
     os_name = os.name
     if os_name != 'posix':  # TODO: This should probably just be a setting on setup.py
         raise click.ClickException(
@@ -84,11 +95,9 @@ def add(obj, task_code, duration, description, date):
     on the task in Odoo (field `code` in project.task). The task code is case
     sensitive.
     """
-    db = _get_database(obj)
     if date is None:
         date = datetime.date.today()
-    with db.transaction() as connection:
-        timesheet_storage = connection.root.timesheet_storage
+    with ots_filestore(obj) as timesheet_storage:
 
         timesheet_storage.add_timesheet(
             task_code=task_code,
@@ -105,10 +114,7 @@ def add(obj, task_code, duration, description, date):
 def start(obj, task_code, description):
     """ Start a new recording. Automatically stops any running recording. """
 
-    db = _get_database(obj)
-    with db.transaction() as connection:
-        timesheet_storage = connection.root.timesheet_storage
-
+    with ots_filestore(obj) as timesheet_storage:
         timesheet_storage.add_and_start_timesheet(task_code=task_code, description=description)
 
 
@@ -116,9 +122,7 @@ def start(obj, task_code, description):
 @click.pass_obj
 def stop(obj):
     """ Stop the currently running time recording. """
-    db = _get_database(obj)
-    with db.transaction() as connection:
-        timesheet_storage = connection.root.timesheet_storage
+    with ots_filestore(obj) as timesheet_storage:
         timesheet_storage.stop_running()
 
 
@@ -141,10 +145,7 @@ def edit(obj, index, description, duration, code, task_id, project_id):
     in the past the timesheet is. So, the index for the first timesheet for yesterday
     would be in the format "1.0" (date offset 1, index 0).
     """
-    db = _get_database(obj)
-
-    with db.transaction() as connection:
-        timesheet_storage = connection.root.timesheet_storage
+    with ots_filestore(obj) as timesheet_storage:
         timesheet_edited = timesheet_storage.edit_timesheet(
             index,
             description=description,
@@ -172,15 +173,13 @@ def drop(obj, index, force):
     in the past the timesheet is. So, the index for the first timesheet for yesterday
     would be in the format "1.0" (date offset 1, index 0).
     """
-    db = _get_database(obj)
     if not force:
         drop_confirmed = click.confirm("Confirm dropping timesheet", default=False)
         if not drop_confirmed:
             click.echo("Timesheet drop aborted.")
             return
 
-    with db.transaction() as connection:
-        timesheet_storage = connection.root.timesheet_storage
+    with ots_filestore(obj) as timesheet_storage:
         timesheet_storage.drop_timesheet(index)
 
 
@@ -193,9 +192,7 @@ def lunch(obj):
     time recorded might help backtracking your work time for the day if you forget to start or stop
     a timesheet and need to do detective work.
     """
-    db = _get_database(obj)
-    with db.transaction() as connection:
-        timesheet_storage = connection.root.timesheet_storage
+    with ots_filestore(obj) as timesheet_storage:
         timesheet_storage.add_and_start_timesheet(description="Lunch", is_worktime=False)
 
 
@@ -212,9 +209,7 @@ def resume(obj, index):
     Using this command multiple times in a row will cause you to alternate between
     two timesheets.
     """
-    db = _get_database(obj)
-    with db.transaction() as connection:
-        timesheet_storage = connection.root.timesheet_storage
+    with ots_filestore(obj) as timesheet_storage:
         timesheet_storage.resume(index)
 
 
@@ -238,9 +233,7 @@ def alias(obj, name, task_code, description, project_id, task_id):
     Using the alias
     ots start emails >>> Will create a timesheet with task code T8217 and description "Emails"
     """
-    db = _get_database(obj)
-    with db.transaction() as connection:
-        timesheet_storage = connection.root.timesheet_storage
+    with ots_filestore(obj) as timesheet_storage:
         if name:
             timesheet_storage.add_alias(
                 name,
@@ -283,9 +276,7 @@ def push(obj, index, date, force):
         if not click.confirm(f"Push {to_be_pushed}?"):
             raise click.Abort()
 
-    db = _get_database(obj)
-    with db.transaction() as connection:
-        timesheet_storage = connection.root.timesheet_storage
+    with ots_filestore(obj) as timesheet_storage:
         timesheet_storage.push(index, date)
 
 
@@ -303,9 +294,7 @@ def search(obj, search_term):
     # TODO: Search a matching ID, matching code or matching name
     #  For every search prints findings separately (or in a table).
     #  If nothing was found, just print some sort of a "nothing found"
-    db = _get_database(obj)
-    with db.transaction() as connection:
-        timesheet_storage = connection.root.timesheet_storage
+    with ots_filestore(obj) as timesheet_storage:
         timesheet_storage.odoo_search_task(search_term)
 
 
@@ -321,16 +310,15 @@ def list_timesheets(obj, days, date):
     DAYS: number of days to print, default 1
     """
 
-    db = _get_database(obj)
     if date:
         date_obj = parser.parse(date).date()
     else:
         date_obj = datetime.date.today()
 
-    with db.transaction() as connection:
+    with ots_filestore(obj) as timesheet_storage:
         for days in reversed(range(0, days)):
             date_to_list = date_obj - relativedelta.relativedelta(days=days)
-            connection.root.timesheet_storage.print_date(date_to_list)
+            timesheet_storage.print_date(date_to_list)
 
 
 @cli.command()
@@ -343,7 +331,6 @@ def login(obj, database):
     any connections to Odoo.
     To remove the session, use `ots logout`
     """
-    db = _get_database(obj)
     config = obj.get('config', {})
 
     default_hostname = config.get('odoo_hostname')
@@ -368,8 +355,7 @@ def login(obj, database):
     })
     _save_config(config)
 
-    with db.transaction() as connection:
-        timesheet_storage = connection.root.timesheet_storage
+    with ots_filestore(obj) as timesheet_storage:
         user_id = timesheet_storage.login(
             username,
             password,
@@ -389,9 +375,7 @@ def logout(obj):
     """
     Log out of Odoo and remove the saved session.
     """
-    db = _get_database(obj)
-    with db.transaction() as connection:
-        timesheet_storage = connection.root.timesheet_storage
+    with ots_filestore(obj) as timesheet_storage:
         timesheet_storage.logout()
         click.echo("Session removed.")
 
@@ -450,7 +434,5 @@ def update(obj, index):
     based on their Task Code or project_id, this does not pull or push any
     timesheet values to/from Odoo.
     """
-    db = _get_database(obj)
-    with db.transaction() as connection:
-        timesheet_storage = connection.root.timesheet_storage
+    with ots_filestore(obj) as timesheet_storage:
         timesheet_storage.update_timesheet_odoo_data(index)
