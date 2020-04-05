@@ -15,6 +15,11 @@ OTS_PATH = str(Path.home() / '.ots')
 DEFAULT_FILESTORE_FILE_NAME = 'filestore.fs'
 
 
+def ensure_path(path):
+    if not path.exists():
+        path.mkdir()
+
+
 def _load_config(path=OTS_PATH):
     config_path = Path(path) / 'config.json'
     if not config_path.exists():
@@ -28,8 +33,7 @@ def _load_config(path=OTS_PATH):
 
 def _save_config(config, path=OTS_PATH):
     config_path = Path(path)
-    if not config_path.exists():
-        os.makedirs(str(config_path), exist_ok=True)
+    ensure_path(config_path)
 
     config_file_path = config_path / 'config.json'
     with config_file_path.open('w') as config_file:
@@ -70,8 +74,7 @@ def cli(ctx):
 
     # Make sure the directory path for `.ots` exists.
     ots_path = Path(OTS_PATH)
-    if not ots_path.exists():
-        ots_path.mkdir()
+    ensure_path(ots_path)
 
     file_storage = FileStorage.FileStorage(str(ots_path / filestore_file_name))
     db = DB(file_storage)
@@ -118,8 +121,12 @@ def add(obj, task_code, duration, description, date):
 @click.argument('task_code', required=False)
 @click.option('-m', 'description', required=False)
 def start(obj, task_code, description):
-    """ Start a new recording. Automatically stops any running recording. """
+    """
+    Start a new recording and automatically stops any running recording.
 
+    TASK_CODE can be a Odoo task code (project.task.code) or a name of an alias.
+    See ots alias --help for further information on aliases.
+    """
     with ots_filestore(obj) as timesheet_storage:
         timesheet_storage.add_and_start_timesheet(task_code=task_code, description=description)
 
@@ -169,7 +176,7 @@ def edit(obj, index, description, duration, code, task_id, project_id):
 @cli.command()
 @click.pass_obj
 @click.argument('index')
-@click.option('-f', '--force')
+@click.option('-f', '--force', is_flag=True)
 def drop(obj, index, force):
     """
     Drops a timesheet.
