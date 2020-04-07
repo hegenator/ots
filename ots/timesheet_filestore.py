@@ -12,18 +12,20 @@ from tabulate import tabulate
 from .helpers import format_timedelta
 from .timesheet import TimeSheet
 from .timesheet_alias import TimeSheetAlias
-from .helpers import apply_duration_string
+from .helpers import apply_duration_string, limit_str_length
+from .__about__ import __version__
 
 
 class TimesheetFileStore(Persistent):
     """
-    The "root" object that would store a bunch of Timesheets.
+    The "root" object that stores and controls Timesheets, and handles
+    the Odoo connection.
     """
 
     def __init__(self):
         self.sequence_next_id = 1
         self.timesheets = IOBTree()
-        self.aliases = OOBTree()  # TODO: This.
+        self.aliases = OOBTree()
 
         # Specific Timesheets of interest
         self.current_running = None
@@ -35,6 +37,8 @@ class TimesheetFileStore(Persistent):
         self.odoo_port = 8069
         self.odoo_database = ""
         self.odoo_username = ""
+        # The ots version this filestore was initiated on.
+        self.version = __version__
 
     def _get_next_id(self):
         next_id = self.sequence_next_id
@@ -90,7 +94,6 @@ class TimesheetFileStore(Persistent):
             try:
                 self._update_timesheet_odoo_data(timesheet)
             except Exception as e:  # TODO: Guess
-                # click.echo(e)
                 click.secho(
                     "Something went wrong when trying to update data from Odoo.\n"
                     f"{e}",
@@ -104,25 +107,39 @@ class TimesheetFileStore(Persistent):
             description="",
             is_worktime=True,
             date=datetime.date.today(),
-            duration=None):
+            duration=None,
+            task_id=None,
+            project_id=None,
+    ):
         """
-
-        :param task_code:
-        :param description:
-        :param is_worktime:
-        :param date:
-        :param duration:
-        :return:
+        :param str task_code: Odoo task code
+        :param str description: Timesheet description
+        :param bool is_worktime: Whether or not the time tracked is work time or not
+        :param datetime.date date: Date of the timesheet
+        :param (datetime.timedelta, str) duration: Duration of tracked time for the timesheet
+        :param int task_id: Odoo database id of the task
+        :param int project_id: Odoo database id of the project
+        :return Timesheet: Return created timesheet
         """
 
         # Check if the task code is an alias
         if task_code and task_code in self.aliases:
             timesheet = self.aliases[task_code].generate_timesheet()
+            edit_vals = {}
+            if description:
+                edit_vals['description'] = description
+            if date != datetime.date.today():
+                edit_vals['date'] = date
+            if edit_vals:
+                self._edit_timesheet(timesheet, **edit_vals)
         else:
             timesheet = TimeSheet(
                 task_code=task_code,
                 description=description,
                 is_worktime=is_worktime,
+                date=date,
+                task_id=task_id,
+                project_id=project_id,
             )
         if duration is not None:
             if not isinstance(duration, datetime.timedelta):
@@ -180,9 +197,21 @@ class TimesheetFileStore(Persistent):
             self.last_running = self.current_running
             self.current_running = None
 
-    def edit_timesheet(self, index, description=None, duration=None, task_code=None, task_id=None, project_id=None):
-        edited = False
+    def edit_timesheet(self, index, **kwargs):
         timesheet = self.get_timesheet_by_index(index)
+        return self._edit_timesheet(timesheet, **kwargs)
+
+    # TODO: This could probably just be a method on the timesheet instead
+    @staticmethod
+    def _edit_timesheet(timesheet,
+                        description=None,
+                        duration=None,
+                        task_code=None,
+                        task_id=None,
+                        project_id=None,
+                        date=None,
+                        ):
+        edited = False
         if description is not None:
             timesheet.description = description
             edited = True
@@ -203,6 +232,9 @@ class TimesheetFileStore(Persistent):
             timesheet.project_id = project_id
             project_id_edited = True
             edited = edited or project_id_edited
+        if date is not None:
+            timesheet.date = date
+            edited = True
 
         return edited
 
@@ -257,10 +289,13 @@ class TimesheetFileStore(Persistent):
         click.echo(f"Dropped timesheet {repr(timesheet)}")
 
     def print_date(self, date=None):
+        ordinal_today = datetime.date.today().toordinal()
         if date is None:
-            date = datetime.date.today()
+            date_ordinal = ordinal_today
+        else:
+            date_ordinal = date.toordinal()
+        date_offset = ordinal_today - date_ordinal
 
-        date_ordinal = date.toordinal()
         timesheets_for_date = self.timesheets.get(date_ordinal, [])
         weekday = calendar.day_name[date.weekday()]
 
@@ -275,21 +310,42 @@ class TimesheetFileStore(Persistent):
                 dur = click.style(dur, fg=colour)
             return dur
 
+        # Table containing the actual data
         table = [
             [
-                ts.project_title,
-                f"{ts.task_code} {ts.task_title[:50]}",
-                ts.description,
+                limit_str_length(ts.project_title),
+                limit_str_length(f"{ts.task_code} {ts.task_title}"),
+                limit_str_length(ts.description),
                 get_coloured_duration(ts)
             ]
             for ts in timesheets_for_date
         ]
+        # Generate values for the index column. This adds the date offset for
+        # dates other than today.
+        no_indices = len(table)
+        index_prefix = str(date_offset) if date_offset else ""
+        indices = [f"{index_prefix}.{i}" if index_prefix else str(i) for i in range(no_indices)]
 
+        # Total work time
         worktime_sheets = [ts for ts in timesheets_for_date if ts.is_worktime]
         total_duration = self.count_total_duration(worktime_sheets)
 
+        # We want to disable tabulate's number parsing on the index column
+        # because it changes '4.0' to '4', which is not desired.
+        # But tabulate doesn't handle this option well if the column is empty,
+        # so we need to only disable it when we actually have something in
+        # the column.
+        disable_numparse = [0] if indices else False
+
         click.secho(f"Timesheets for {date.isoformat()}, ({weekday})", fg='green', bold=True)
-        click.echo(tabulate(table, headers=headers, showindex='always'))
+        click.echo(
+            tabulate(
+                table,
+                headers=headers,
+                showindex=indices,
+                disable_numparse=disable_numparse,
+            )
+        )
         click.echo(f"Total Work Time: {format_timedelta(total_duration)}")
 
     @staticmethod
@@ -476,17 +532,13 @@ class TimesheetFileStore(Persistent):
 
         if not project_ids and not task_ids:
             click.secho("No results found.", fg='yellow', bold=True)
+            return
         else:
             click.secho(f"Search results for \"{search_term}\"", fg='green', bold=True)
 
-        def limit_length(value, max_len=50):
-            max_len = max(max_len, 3)
-            value = str(value)
-            if len(value) > max_len:
-                return f"{value[:max_len - 3]}..."
-            return value
-
+        result_strings = []
         if task_ids:
+
             # read always returns id, even if we don't ask for it, but we use it as a header
             # so simpler to include it here and reuse the fields-list as the table headers
             task_fields = [
@@ -497,30 +549,34 @@ class TimesheetFileStore(Persistent):
                 "id",
             ]
             task_vals = odoo.env['project.task'].browse(task_ids).read(task_fields)
-            click.secho("Tasks:", fg='green', bold=True)
-            task_headers = task_fields
             table = [
                 [
-                    limit_length(data[field]) for field in task_headers
+                    limit_str_length(data[field]) for field in task_fields
                 ]
                 for data in task_vals
             ]
+            ttitle = click.style("Tasks:", fg='green', bold=True)
+            ttable = tabulate(table, headers=task_fields)
+            task_result = f"{ttitle}\n{ttable}"
+            result_strings.append(task_result)
 
-            click.echo(tabulate(table, headers=task_headers))
-            
         if project_ids:
             project_fields = [
                 "name",
                 "id",
             ]
             project_vals = odoo.env['project.project'].browse(project_ids).read(project_fields)
-            click.secho("Projects:", fg='green', bold=True)
-            project_headers = project_fields
-            table = [
-                [limit_length(data[field]) for field in project_headers] for data in project_vals
-            ]
 
-            click.echo(tabulate(table, headers=project_headers))
+            table = [
+                [limit_str_length(data[field]) for field in project_fields] for data in project_vals
+            ]
+            ptitle = click.style("Projects:", fg='green', bold=True)
+            ptable = tabulate(table, headers=project_fields)
+            project_result = f"{ptitle}\n{ptable}"
+            result_strings.append(project_result)
+
+        if result_strings:
+            click.echo("\n\n".join(result_strings))
 
     def update_timesheet_odoo_data(self, index):
         timesheet = self.get_timesheet_by_index(index)
@@ -528,6 +584,11 @@ class TimesheetFileStore(Persistent):
         self._update_timesheet_odoo_data(timesheet)
 
     def _update_timesheet_odoo_data(self, timesheet):
+        """
+        Updates the project and task titles of a Timesheet or TimesheetAlias
+        :param timesheet:
+        :return:
+        """
         odoo = self.load_odoo_session()
 
         task_code = timesheet.task_code
@@ -551,7 +612,7 @@ class TimesheetFileStore(Persistent):
         else:
             # TODO: Later, we would like to upgrade some information on the timesheet
             #  even though we didn't have the task code, if we have task_id or project_id instead
-            click.echo("Timesheet has no task code, information not updated.")
+            click.echo("Timesheet has no task code or project_id, information not updated.")
 
         employee_id = odoo.env['hr.employee'].search([('user_id', '=', odoo.env.uid)], limit=1)
         timesheet.employee_id = employee_id[0] if employee_id else None

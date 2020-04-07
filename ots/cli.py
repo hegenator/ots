@@ -8,6 +8,7 @@ from dateutil import parser, relativedelta
 from pathlib import Path
 from ZODB import DB, FileStorage
 
+from .migration.migrate import check_and_migrate
 from .timesheet_filestore import TimesheetFileStore
 
 
@@ -51,8 +52,10 @@ def _get_database(obj):
 @contextmanager
 def ots_filestore(obj):
     db = _get_database(obj)
+    auto_migrate = obj.get('config', {}).get('auto_migrate', True)
     with db.transaction() as connection:
         timesheet_storage = connection.root.timesheet_storage
+        check_and_migrate(timesheet_storage, auto_migrate=auto_migrate)
         yield timesheet_storage
 
 
@@ -97,8 +100,10 @@ def cli(ctx):
 @click.option('-d', 'duration',
               help="Duration of the timesheet entry in format HH:mm.")
 @click.option('-m', 'description', help="Timesheet description.")
+@click.option('-t', '--task-id', type=click.types.INT)
+@click.option('-p', '--project-id', type=click.types.INT)
 @click.option('--date', type=click.types.DateTime(formats=['%Y-%m-%d']), help="Date to add the timesheet to, if other than today.")
-def add(obj, task_code, duration, description, date):
+def add(obj, task_code, duration, description, task_id, project_id, date):
     """
     Adds a timesheet entry without starting it. Task code is the task code
     on the task in Odoo (field `code` in project.task). The task code is case
@@ -113,14 +118,18 @@ def add(obj, task_code, duration, description, date):
             description=description,
             date=date,
             duration=duration,
+            project_id=project_id,
+            task_id=task_id,
         )
 
 
 @cli.command()
 @click.pass_obj
 @click.argument('task_code', required=False)
-@click.option('-m', 'description', required=False)
-def start(obj, task_code, description):
+@click.option('-m', 'description')
+@click.option('-t', '--task-id', type=click.types.INT)
+@click.option('-p', '--project-id', type=click.types.INT)
+def start(obj, task_code, description, task_id, project_id):
     """
     Start a new recording and automatically stops any running recording.
 
@@ -128,7 +137,12 @@ def start(obj, task_code, description):
     See ots alias --help for further information on aliases.
     """
     with ots_filestore(obj) as timesheet_storage:
-        timesheet_storage.add_and_start_timesheet(task_code=task_code, description=description)
+        timesheet_storage.add_and_start_timesheet(
+            task_code=task_code,
+            description=description,
+            task_id=task_id,
+            project_id=project_id,
+        )
 
 
 @cli.command()
@@ -147,8 +161,8 @@ def stop(obj):
               help="Duration of the timesheet entry in format HH:mm. Add +/- at the start to "
                    "increased/decrease the current duration instead.")
 @click.option('-c', '--code', help="Task Code")
-@click.option('-t', '--task_id', type=click.types.INT)
-@click.option('-p', '--project_id', type=click.types.INT)
+@click.option('-t', '--task-id', type=click.types.INT)
+@click.option('-p', '--project-id', type=click.types.INT)
 def edit(obj, index, description, duration, code, task_id, project_id):
     """
     Edit information on an existing timesheet.
@@ -257,13 +271,6 @@ def alias(obj, name, task_code, description, project_id, task_id):
             )
         else:
             timesheet_storage.print_aliases()
-
-
-@cli.command()
-@click.pass_obj
-def sync(obj):
-    """ Synchronise the timesheets with Odoo. """
-    raise NotImplementedError("Not done, sry.")
 
 
 @cli.command()
@@ -403,25 +410,16 @@ def setup(obj, advanced):
     """
     config = obj.get('config', {})
     # DEFAULTS
-    # Database connection related values
-    default_host = config.get('odoo_hostname')
     default_filestore = config.get('filestore', DEFAULT_FILESTORE_FILE_NAME)
-    ssl = config.get('ssl', True)
-
-    # Preferences
-    # default_auto_sync = config.get('auto_sync')
+    default_auto_migrate = config.get('auto_migrate', True)
 
     # Prompt for new values
-    host = click.prompt("Odoo host to connect to", default=default_host)
-
-    automatic_sync = False
-
+    auto_migrate = click.prompt("Automatically migrate filestore to new version when OTS version "
+                                "is upgraded?", default=default_auto_migrate)
     config_values = {
-        'odoo_hostname': host,
-        'auto_sync': automatic_sync,
+        'auto_migrate': auto_migrate,
     }
     if advanced:
-        ssl = click.confirm("Use SSL for the connection?", default=True)
         filestore = click.prompt(
             "Name of the local filestore file that stores the Timesheets. "
             "This can be used to have several separate local databases of timesheets.",
@@ -432,7 +430,6 @@ def setup(obj, advanced):
 
         config_values['filestore'] = filestore
 
-    config_values['ssl'] = ssl
     config.update(config_values)
     _save_config(config)
 
