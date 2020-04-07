@@ -1,19 +1,14 @@
 import click
 import datetime
-import odoorpc
 import copy
 from .helpers import format_timedelta
 from persistent import Persistent
 
 
 class TimeSheet(Persistent):
-
-    # For migration purposes. Storage might have TimeSheets that do not posses the some
-    # attributes since they were created before that attribute was introduced. Such attributes
-    # should be added here with a default value.
-    task_title = ""
-    project_title = ""
-    odoo_id = None
+    """
+    A Timesheet that tracks work time spent on a specific Odoo task or project.
+    """
 
     def __init__(
             self,
@@ -21,16 +16,20 @@ class TimeSheet(Persistent):
             task_id=None,
             description="",
             task_code="",
-            task_title="",
-            project_title="",
             duration=datetime.timedelta(),
-            is_worktime=True):
+            is_worktime=True,
+            date=datetime.date.today(),
+    ):
         """
         Stuff and shit
-        :param project_id:
-        :param task_id:
-        :param description:
-        :param is_worktime:
+        :param int project_id: Project's database ID in Odoo
+        :param int task_id: Task's database ID in Odoo
+        :param str description: Timesheet description
+        :param datetime.timedelta: Initial tracked duration
+        :param str task_code: Odoo task code (project.task.code)
+        :param bool is_worktime: Whether or not the time recorded by this timesheet
+        is considered work time.
+        :param datetime.date date:
         """
         if project_id is not None:
             assert isinstance(project_id, int)
@@ -43,15 +42,15 @@ class TimeSheet(Persistent):
         self.is_worktime = is_worktime
 
         self.task_code = task_code or ""
-        self.task_title = task_title or ""
-        self.project_title = project_title or ""
+        self.task_title = ""
+        self.project_title = ""
         self.description = description or ""
 
         self.start_time = None  # datetime.datetime
         self.duration = duration  # datetime.timedelta
+        self.date = date
         self.created = datetime.datetime.now()
 
-        self.username = None  # TODO: Don't remember what I was planning on using this for...
         self.employee_id = None  # Employee ID in Odoo
 
         # The filestore assigns a value for this once stored for the first time
@@ -160,7 +159,7 @@ class TimeSheet(Persistent):
             'task_id': self.task_id,
             'employee_id': self.employee_id,
             'unit_amount': unit_amount,
-            'date': self.created.date().isoformat(),
+            'date': self.date.isoformat(),
         }
 
     def copy(self):

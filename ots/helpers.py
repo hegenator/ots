@@ -51,3 +51,11 @@ def apply_duration_string(duration_str, base_duration=None):
         res_duration = parsed_duration
 
     return res_duration
+
+
+def limit_str_length(value, max_len=50):
+    max_len = max(max_len, 3)
+    value = str(value)
+    if len(value) > max_len:
+        return f"{value[:max_len - 3]}..."
+    return value
