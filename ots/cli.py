@@ -60,6 +60,7 @@ def ots_filestore(obj):
 
 
 @click.group()
+@click.version_option()
 @click.pass_context
 def cli(ctx):
     """ Simple tool to record your time usage and send it to Odoo. """
@@ -102,7 +103,8 @@ def cli(ctx):
 @click.option('-m', 'description', help="Timesheet description.")
 @click.option('-t', '--task-id', type=click.types.INT)
 @click.option('-p', '--project-id', type=click.types.INT)
-@click.option('--date', type=click.types.DateTime(formats=['%Y-%m-%d']), help="Date to add the timesheet to, if other than today.")
+@click.option('--date', type=click.types.DateTime(formats=['%Y-%m-%d']),
+              help="Date to add the timesheet to, if other than today.")
 def add(obj, task_code, duration, description, task_id, project_id, date):
     """
     Adds a timesheet entry without starting it. Task code is the task code
@@ -240,17 +242,43 @@ def resume(obj, index):
         timesheet_storage.resume(index)
 
 
-@cli.command()
-@click.argument('name', required=False)
+@cli.group(invoke_without_command=True)
+@click.pass_context
+def alias(ctx):
+    """
+    Command group for handling Timesheet aliases. Invokes sub command 'list'
+    if called without a sub command.
+    """
+    # If `ots alias` is called without a sub command, list aliases.
+    # This if for convenience and to keep the original functionality.
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(alias_list)
+
+
+@alias.command('list')
+@click.option('--details', is_flag=True,
+              help="Show more details about the alias, such as the normally hidden "
+                   "task_id and project_id.")
+@click.pass_obj
+def alias_list(obj, details):
+    """
+    Lists all existing aliases.
+    """
+    with ots_filestore(obj) as timesheet_storage:
+        timesheet_storage.print_aliases(include_details=details)
+
+
+@alias.command('add')
+@click.argument('name')
 @click.argument('task_code', required=False)
 @click.option('-m', 'description')
 @click.option('--project_id', type=int, help="Odoo database ID of a project.")
 @click.option('--task_id', type=int, help="Odoo database ID of a task.")
 @click.pass_obj
-def alias(obj, name, task_code, description, project_id, task_id):
+def alias_add(obj, name, task_code, description, project_id, task_id):
     """
     Create an alias for a timesheet. Argument "name" is the name of the Alias,
-    using which you can later on create a timesheet by the alias.
+    using which you can later on create a timesheet.
 
     If no arguments are given, a list of existing aliases will be printed.
 
@@ -261,16 +289,47 @@ def alias(obj, name, task_code, description, project_id, task_id):
     ots start emails >>> Will create a timesheet with task code T8217 and description "Emails"
     """
     with ots_filestore(obj) as timesheet_storage:
-        if name:
-            timesheet_storage.add_alias(
-                name,
-                task_code=task_code,
-                description=description,
-                project_id=project_id,
-                task_id=task_id,
-            )
-        else:
-            timesheet_storage.print_aliases()
+        timesheet_storage.add_alias(
+            name,
+            task_code=task_code,
+            description=description,
+            project_id=project_id,
+            task_id=task_id,
+        )
+
+
+@alias.command('delete')
+@click.argument('name')
+@click.pass_obj
+def alias_delete(obj, name):
+    """
+    Drop an alias by name.
+    """
+    with ots_filestore(obj) as timesheet_storage:
+        timesheet_storage.delete_alias(name)
+
+
+@alias.command('update')
+@click.argument('name', required=False)
+@click.option('-a', '--all', 'update_all', is_flag=True,
+              help="Update all aliases. Omit the 'name' argument when using the 'all' flag.")
+@click.pass_context
+def alias_update(ctx, name, update_all):
+    """
+    Update project and task titles for aliases from Odoo.
+    """
+    if not name and not update_all:
+        # Since name is not required, we need to handle a case of "nothing to do"
+        # ourselves. If this happens, print the help text.
+        click.echo(ctx.get_help())
+        return
+
+    if name and update_all:
+        raise click.UsageError("If 'all' flag is given, name should be omitted.")
+
+    obj = ctx.obj
+    with ots_filestore(obj) as timesheet_storage:
+        timesheet_storage.update_alias(name)
 
 
 @cli.command()

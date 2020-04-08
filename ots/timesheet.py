@@ -1,7 +1,7 @@
 import click
 import datetime
 import copy
-from .helpers import format_timedelta
+from .helpers import format_timedelta, apply_duration_string
 from persistent import Persistent
 
 
@@ -92,6 +92,41 @@ class TimeSheet(Persistent):
         self.start_time = None
         click.echo(f"Timesheet stopped: {repr(self)}")
 
+    def edit(self,
+             description=None,
+             duration=None,
+             task_code=None,
+             task_id=None,
+             project_id=None,
+             date=None,
+             ):
+        edited = False
+        if description is not None:
+            self.description = description
+            edited = True
+        if duration is not None:
+            if not isinstance(duration, datetime.timedelta):
+                duration = apply_duration_string(duration, base_duration=self.duration)
+            self.set_duration(duration)
+            edited = True
+        if task_code is not None:
+            self.task_code = task_code
+            edited = True
+        if task_id is not None:
+            task_id_edited = self.set_task_id(task_id)
+            edited = edited or task_id_edited
+        if project_id is not None:
+            # TODO: What was the idea behind this?
+            # project_id_edited = timesheet.set_project_id(project_id)
+            self.project_id = project_id
+            project_id_edited = True
+            edited = edited or project_id_edited
+        if date is not None:
+            self.date = date
+            edited = True
+
+        return edited
+
     def is_running(self):
         return bool(self.start_time)
 
@@ -165,3 +200,36 @@ class TimeSheet(Persistent):
     def copy(self):
         # TODO: Should we just construct our own copying later? What do we gain from doing that?
         return copy.deepcopy(self)
+
+    def update(self, storage):
+        """
+        Updates the project and task titles of a Timesheet or TimesheetAlias
+        :param odoo: odoorpc.Odoo authenticated to a database
+        """
+        odoo = storage.load_odoo_session()
+
+        task_code = self.task_code
+        if task_code:
+            task_id = storage._odoo_search_task_by_code(task_code)
+            if task_id:
+                task = odoo.env['project.task'].browse(task_id)
+                # read returns a list, but only one task so extract the dict
+                task_vals = task.read(["project_id", "name"])[0]
+
+                self.task_id = task_vals.get("id")
+                self.task_title = task_vals.get("name", "")
+
+                project_id, project_title = task_vals.get("project_id", (None, ""))
+                self.project_id = project_id
+                self.project_title = project_title
+        elif self.project_id:
+            project = odoo.env['project.project'].browse(self.project_id)
+            self.project_title = project.name
+
+        else:
+            # TODO: Later, we would like to upgrade some information on the timesheet
+            #  even though we didn't have the task code, if we have task_id or project_id instead
+            click.echo("Timesheet has no task code or project_id, information not updated.")
+
+        employee_id = odoo.env['hr.employee'].search([('user_id', '=', odoo.env.uid)], limit=1)
+        self.employee_id = employee_id[0] if employee_id else None
