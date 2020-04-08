@@ -92,7 +92,7 @@ class TimesheetFileStore(Persistent):
         # attempt to update the timesheet, but don't explode even if it fails
         if self.is_session_stored():
             try:
-                self._update_timesheet_odoo_data(timesheet)
+                timesheet.update(self)
             except Exception as e:  # TODO: Guess
                 click.secho(
                     "Something went wrong when trying to update data from Odoo.\n"
@@ -199,44 +199,7 @@ class TimesheetFileStore(Persistent):
 
     def edit_timesheet(self, index, **kwargs):
         timesheet = self.get_timesheet_by_index(index)
-        return self._edit_timesheet(timesheet, **kwargs)
-
-    # TODO: This could probably just be a method on the timesheet instead
-    @staticmethod
-    def _edit_timesheet(timesheet,
-                        description=None,
-                        duration=None,
-                        task_code=None,
-                        task_id=None,
-                        project_id=None,
-                        date=None,
-                        ):
-        edited = False
-        if description is not None:
-            timesheet.description = description
-            edited = True
-        if duration is not None:
-            if not isinstance(duration, datetime.timedelta):
-                duration = apply_duration_string(duration, base_duration=timesheet.duration)
-            timesheet.set_duration(duration)
-            edited = True
-        if task_code is not None:
-            timesheet.task_code = task_code
-            edited = True
-        if task_id is not None:
-            task_id_edited = timesheet.set_task_id(task_id)
-            edited = edited or task_id_edited
-        if project_id is not None:
-            # TODO: What was the idea behind this?
-            # project_id_edited = timesheet.set_project_id(project_id)
-            timesheet.project_id = project_id
-            project_id_edited = True
-            edited = edited or project_id_edited
-        if date is not None:
-            timesheet.date = date
-            edited = True
-
-        return edited
+        return timesheet.edit(timesheet, **kwargs)
 
     def get_timesheet_by_index(self, index):
         """
@@ -359,6 +322,12 @@ class TimesheetFileStore(Persistent):
     # ============================
     # =====     Aliases     ======
     # ============================
+    def _get_alias(self, name):
+        try:
+            alias = self.aliases[name]
+        except KeyError:
+            raise click.ClickException(f"Alias {name} does not exist.")
+        return alias
 
     def add_alias(self, name, task_code="", description="", project_id=None, task_id=None):
         new_alias = TimeSheetAlias(
@@ -370,6 +339,25 @@ class TimesheetFileStore(Persistent):
         )
         self.aliases[name] = new_alias
         click.echo(f"Alias {name} added.")
+        if self.is_session_stored():
+            try:
+                new_alias.update(self)
+            except Exception as e:  # TODO: Guess
+                click.secho(
+                    "Something went wrong when trying to update data from Odoo.\n"
+                    f"{e}",
+                    fg='yellow',
+                    bold=True,
+                )
+
+    def delete_alias(self, name):
+        try:
+            self.aliases.pop(name)
+        except KeyError:
+            raise click.UsageError(f"Alias {name} doesn't exist, "
+                                   "and thus can't be deleted.")
+
+        click.echo(f"Alias {name} deleted.")
 
     def print_aliases(self, include_details=False):
         attributes = [
@@ -390,10 +378,36 @@ class TimesheetFileStore(Persistent):
         headers = [a[0] for a in attributes]
 
         table = [
-            [getattr(alias, a[1]) for a in attributes] for alias in aliases
+            [limit_str_length(getattr(alias, a[1])) for a in attributes] for alias in aliases
         ]
 
         click.echo(tabulate(table, headers=headers))
+
+    def update_alias(self, name):
+        """
+        Update an alias from Odoo. If no name is given, update all aliases.
+        :param str name: name of an alias, or None to update all aliases
+        """
+        if self.is_session_stored():
+            if name is not None:
+                aliases = [self._get_alias(name)]
+            else:
+                aliases = self.aliases.values()
+
+            try:
+                with click.progressbar(aliases) as alias_bar:
+                    for alias in alias_bar:
+                        alias.update(self)
+            except Exception as e:  # TODO: Guess
+                click.secho(
+                    "Something went wrong when trying to update data from Odoo.\n"
+                    f"{e}",
+                    fg='yellow',
+                    bold=True,
+                )
+        else:
+            raise click.ClickException("Odoo session not available. To update data from Odoo, "
+                                       "please log in with 'ots login'.")
 
     # ============================
     # ===== Odoo connection ======
@@ -582,37 +596,5 @@ class TimesheetFileStore(Persistent):
         timesheet = self.get_timesheet_by_index(index)
         # TODO: Create a mass-update version with date-ranges or something.
         self._update_timesheet_odoo_data(timesheet)
-
-    def _update_timesheet_odoo_data(self, timesheet):
-        """
-        Updates the project and task titles of a Timesheet or TimesheetAlias
-        :param timesheet:
-        :return:
-        """
         odoo = self.load_odoo_session()
-
-        task_code = timesheet.task_code
-        if task_code:
-            task_id = self._odoo_search_task_by_code(task_code)
-            if task_id:
-                task = odoo.env['project.task'].browse(task_id)
-                # read returns a list, but only one task so extract the dict
-                task_vals = task.read(["project_id", "name"])[0]
-
-                timesheet.task_id = task_vals.get("id")
-                timesheet.task_title = task_vals.get("name", "")
-
-                project_id, project_title = task_vals.get("project_id", (None, ""))
-                timesheet.project_id = project_id
-                timesheet.project_title = project_title
-        elif timesheet.project_id:
-            project = odoo.env['project.project'].browse(timesheet.project_id)
-            timesheet.project_title = project.name
-
-        else:
-            # TODO: Later, we would like to upgrade some information on the timesheet
-            #  even though we didn't have the task code, if we have task_id or project_id instead
-            click.echo("Timesheet has no task code or project_id, information not updated.")
-
-        employee_id = odoo.env['hr.employee'].search([('user_id', '=', odoo.env.uid)], limit=1)
-        timesheet.employee_id = employee_id[0] if employee_id else None
+        timesheet.update(odoo)
