@@ -314,8 +314,6 @@ to override it with a new one.
 ## TODO
 This is a list of known shortcoming or bugs.
 
-* `alias` should be a subcommand group that has options under it. 
-This will allow more versatile handling of aliases. For example `ots alias drop`
 * OTS does not track the possible differences of timesheets between Odoo and the local filestore
   * listing will only show (with color codes) if a timesheet has been pushed to Odoo or not. It does 
   not case if they are out of sync, or even if the timesheet no longer exists in Odoo.

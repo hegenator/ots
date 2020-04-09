@@ -131,7 +131,7 @@ class TimesheetFileStore(Persistent):
             if date != datetime.date.today():
                 edit_vals['date'] = date
             if edit_vals:
-                self._edit_timesheet(timesheet, **edit_vals)
+                timesheet.edit(**edit_vals)
         else:
             timesheet = TimeSheet(
                 task_code=task_code,
@@ -491,8 +491,9 @@ class TimesheetFileStore(Persistent):
             timesheets = self.timesheets.get(date_ordinal, [])
 
         odoo = self.load_odoo_session()
-        for timesheet in timesheets:
-            timesheet.odoo_push(odoo)
+        with click.progressbar(timesheets) as timesheet_bar:
+            for timesheet in timesheet_bar:
+                timesheet.odoo_push(odoo)
 
     def print_odoo_search_results(self, search_term):
         raise NotImplementedError()
