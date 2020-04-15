@@ -199,7 +199,7 @@ class TimesheetFileStore(Persistent):
 
     def edit_timesheet(self, index, **kwargs):
         timesheet = self.get_timesheet_by_index(index)
-        return timesheet.edit(timesheet, **kwargs)
+        return timesheet.edit(**kwargs)
 
     def get_timesheet_by_index(self, index):
         """
@@ -596,6 +596,4 @@ class TimesheetFileStore(Persistent):
     def update_timesheet_odoo_data(self, index):
         timesheet = self.get_timesheet_by_index(index)
         # TODO: Create a mass-update version with date-ranges or something.
-        self._update_timesheet_odoo_data(timesheet)
-        odoo = self.load_odoo_session()
-        timesheet.update(odoo)
+        timesheet.update(self)
