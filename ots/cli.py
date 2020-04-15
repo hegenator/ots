@@ -158,7 +158,7 @@ def stop(obj):
 @cli.command()
 @click.pass_obj
 @click.argument('index')
-@click.option('-m', 'description', required=False)
+@click.option('-m', 'description')
 @click.option('-d', 'duration',
               help="Duration of the timesheet entry in format HH:mm. Add +/- at the start to "
                    "increased/decrease the current duration instead.")
