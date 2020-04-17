@@ -195,6 +195,7 @@ class TimeSheet(Persistent):
             'employee_id': self.employee_id,
             'unit_amount': unit_amount,
             'date': self.date.isoformat(),
+            'name': self.description,
         }
 
     def copy(self):
