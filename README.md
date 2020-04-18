@@ -26,9 +26,25 @@ Clone the repository locally, and install from that local repository
 git clone https://github.com/hegenator/ots.git
 pip3 install ots/
 ```
-Optionally add the  editable flag `-e` to have an easier transition from version to another
+
+### Development
+
+It is strongly recommended you use a virtual environment manager for 
+development: we recommend 
+[`pipenv`](https://pipenv-fork.readthedocs.io/en/latest/).
+
+Clone the repositotory locally and install it editably:
 ```
+git clone https://github.com/hegenator/ots.git
 pip3 install -e ots/
+```
+Also install development dependencies:
+```
+pip3 install -r ots/requirements.txt
+```
+Run tests (in the cloned directory):
+```
+pytest tests --cov=ots
 ```
 
 ## ots --help
