@@ -1,7 +1,7 @@
 from setuptools import setup
 from ots.__about__ import __version__
 
-VERSION = '0.2'
+VERSION = __version__
 
 setup(
     name='Odoo TimeSheets',
