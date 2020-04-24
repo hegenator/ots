@@ -92,6 +92,20 @@ class TimeSheet(Persistent):
         self.start_time = None
         click.echo(f"Timesheet stopped: {repr(self)}")
 
+    def set_task_id(self, task_id):
+        # TODO: This should probably attempt to refresh the title
+        if self.task_id != task_id:
+            self.task_id = task_id
+            return True
+        return False
+
+    def set_project_id(self, project_id):
+        # TODO: This should probably attempt to refresh the title
+        if self.project_id != project_id:
+            self.project_id = project_id
+            return True
+        return False
+
     def edit(self,
              description=None,
              duration=None,
@@ -117,9 +131,7 @@ class TimeSheet(Persistent):
             edited = edited or task_id_edited
         if project_id is not None:
             # TODO: What was the idea behind this?
-            # project_id_edited = timesheet.set_project_id(project_id)
-            self.project_id = project_id
-            project_id_edited = True
+            project_id_edited = self.set_project_id(project_id)
             edited = edited or project_id_edited
         if date is not None:
             self.date = date
