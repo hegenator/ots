@@ -1,12 +1,13 @@
 from setuptools import setup
 from ots.__about__ import __version__
 
-VERSION = '0.2'
-
 setup(
     name='Odoo TimeSheets',
     version=__version__,
-    packages=['ots'],
+    packages=[
+        'ots',
+        'ots.migration',
+    ],
     install_requires=[
         'BTrees',
         'Click',
