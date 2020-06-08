@@ -113,8 +113,10 @@ class TimeSheet(Persistent):
              task_id=None,
              project_id=None,
              date=None,
+             storage=None,
              ):
         edited = False
+        update = False  # Should we update info from Odoo after edit is done
         if description is not None:
             self.description = description
             edited = True
@@ -126,16 +128,22 @@ class TimeSheet(Persistent):
         if task_code is not None:
             self.task_code = task_code
             edited = True
+            update = True
         if task_id is not None:
             task_id_edited = self.set_task_id(task_id)
             edited = edited or task_id_edited
+            update = True
         if project_id is not None:
             # TODO: What was the idea behind this?
             project_id_edited = self.set_project_id(project_id)
             edited = edited or project_id_edited
+            update = True
         if date is not None:
             self.date = date
             edited = True
+
+        if update and storage:
+            self.update(storage)
 
         return edited
 
@@ -161,7 +169,7 @@ class TimeSheet(Persistent):
         else:
             new_id = timesheet_model.create(timesheet_vals)
             self.odoo_id = new_id
-            click.echo(f"New timesheet created with id {new_id}")
+        return self.odoo_id
 
     def set_duration(self, duration):
         if self.is_running():

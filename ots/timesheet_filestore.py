@@ -8,6 +8,7 @@ from persistent import Persistent
 from BTrees.IOBTree import IOBTree
 from BTrees.OOBTree import OOBTree
 from tabulate import tabulate
+from collections import defaultdict
 
 from .helpers import format_timedelta
 from .timesheet import TimeSheet
@@ -199,7 +200,7 @@ class TimesheetFileStore(Persistent):
 
     def edit_timesheet(self, index, **kwargs):
         timesheet = self.get_timesheet_by_index(index)
-        return timesheet.edit(**kwargs)
+        return timesheet.edit(storage=self, **kwargs)
 
     def get_timesheet_by_index(self, index):
         """
@@ -481,6 +482,8 @@ class TimesheetFileStore(Persistent):
         return self._get_odoo_session_name() in odoorpc.ODOO.list()
 
     def push(self, index, date):
+        created = []
+        wrote = []
         if index:
             timesheets = [self.get_timesheet_by_index(index)]
         else:
@@ -493,7 +496,17 @@ class TimesheetFileStore(Persistent):
         odoo = self.load_odoo_session()
         with click.progressbar(timesheets) as timesheet_bar:
             for timesheet in timesheet_bar:
-                timesheet.odoo_push(odoo)
+                odoo_id = timesheet.odoo_id
+                new_id = timesheet.odoo_push(odoo)
+                if odoo_id:
+                    wrote.append(str(odoo_id))
+                elif new_id:
+                    created.append(str(new_id))
+
+        if created:
+            click.echo(f"New timesheets created with ids: {', '.join(created)}")
+        if wrote:
+            click.echo(f"Wrote possible changes to existing timesheets: {', '.join(wrote)}")
 
     def print_odoo_search_results(self, search_term):
         raise NotImplementedError()
@@ -531,7 +544,7 @@ class TimesheetFileStore(Persistent):
             # We found no exact match, search for tasks or projects matching the search term
             task_ids = task_model.search(
                 [('name', 'ilike', search_term)],
-                order="project_id, id desc"  # TODO: Experimenting, possibly won't need customer order
+                order="project_id, id desc"  # TODO: Experimenting, possibly won't need custom order
             )
             project_ids = project_model.search([('name', 'ilike', search_term)])
 

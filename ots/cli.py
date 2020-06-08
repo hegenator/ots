@@ -334,24 +334,27 @@ def alias_update(ctx, name, update_all):
 
 @cli.command()
 @click.argument('index', required=False)
-@click.option('--date', type=click.types.DateTime(formats=['%Y-%m-%d']),
+@click.option('--date', 'dt', type=click.types.DateTime(formats=['%Y-%m-%d']),
               help="Date to push, if not today. YYYY-MM-DD")
 @click.option('-f', '--force', is_flag=True)
 @click.pass_obj
-def push(obj, index, date, force):
+def push(obj, index, dt, force):
     """
     Push timesheets to Odoo. If no arguments or options are given,
     all timesheets of today will be pushed. If an index is given, only that
     one timesheet is pushed. If a date is given as an option, all timesheets
     of that one day will be pushed.
     """
-    if index and date:
-        click.UsageError(
-            "Give an index or a date, not both. If you want to push a single timesheet, "
-            "use an index. If you want to push an entire date, use a date instead.")
+    date = None
+    if dt:
+        date = dt.date()
+        if index:
+            click.UsageError(
+                "Give an index or a date, not both. If you want to push a single timesheet, "
+                "use an index. If you want to push an entire date, use a date instead.")
 
     if not force:
-        to_be_pushed = index or date or datetime.date.today().isoformat()
+        to_be_pushed = index or date and date.isoformat() or datetime.date.today().isoformat()
         if not click.confirm(f"Push {to_be_pushed}?"):
             raise click.Abort()
 
