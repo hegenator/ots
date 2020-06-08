@@ -15,7 +15,24 @@ Use `pip` to install `ots`. `ots` requires Python>=3.6, so depending on your
 Python installation you probably need to use `pip3`.
 
 ### Install from Github
-`pip3 install git+https://github.com/hegenator/ots`
+```
+pip3 install --user git+https://github.com/hegenator/ots
+```
+
+### Update from Github
+#### To the latest version
+```
+pip3 install --user --upgrade git+https://github.com/hegenator/ots
+```
+#### To specific tag or branch
+```
+pip3 install --user --upgrade git+https://github.com/hegenator/ots@tag_or_branch_name
+```
+For example, to install version `v0.3`
+```
+pip3 install --user --upgrade git+https://github.com/hegenator/ots@v0.3
+```
+
 
 ### Install from local repository
 This is currently the recommended way of installation, since as of writing this, the `master`
