@@ -1,3 +1,5 @@
+import inspect
+
 import click
 import datetime
 import copy
@@ -218,9 +220,19 @@ class TimeSheet(Persistent):
             'name': self.description,
         }
 
-    def copy(self):
-        # TODO: Should we just construct our own copying later? What do we gain from doing that?
-        return copy.deepcopy(self)
+    def copy(self, **overrides):
+        """
+        Create a copy of this timesheet.
+
+        :param overrides: Keyword arguments used to override the values for the
+            copy.
+        :return:
+        """
+        copy_values = {}
+        init_signature = inspect.signature(TimeSheet)
+        for field in init_signature.parameters:
+            copy_values[field] = overrides.get(field, getattr(self, field))
+        return TimeSheet(**copy_values)
 
     def update(self, storage):
         """

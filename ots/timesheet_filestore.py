@@ -181,11 +181,22 @@ class TimesheetFileStore(Persistent):
             else:
                 self.last_running = None
 
-            self.current_running = to_resume
+            today = datetime.date.today()
+            # TODO: allow the user to configure that they want a new timesheet
+            #  on the same day if the resumed timesheet has been pushed to Odoo?
+            if to_resume.date != today:
+                # Resuming on a different day: start a new timesheet with the
+                # same details
+                new_timesheet = to_resume.copy(
+                    date=today,
+                    duration=datetime.timedelta(),
+                )
+                self._add_timesheet(new_timesheet)
+                self.current_running = new_timesheet
+            else:
+                # Still the same day: we can continue the same timesheet
+                self.current_running = to_resume
             self.current_running.start()
-            # TODO: We need to have some sort of logic for what happens if one resumes
-            #  a timesheet from yesterday. It should start a new timesheet with the same specs,
-            #  but for today.
 
     def stop_running(self):
         if self.current_running:
