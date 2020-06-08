@@ -15,13 +15,15 @@ from .timesheet_filestore import TimesheetFileStore
 OTS_PATH = str(Path.home() / '.ots')
 DEFAULT_FILESTORE_FILE_NAME = 'filestore.fs'
 
+DEFAULT_APP_DIR = click.get_app_dir("ots", force_posix=True)
+
 
 def ensure_path(path):
     if not path.exists():
         path.mkdir()
 
 
-def _load_config(path=OTS_PATH):
+def _load_config(path):
     config_path = Path(path) / 'config.json'
     if not config_path.exists():
         return {}
@@ -32,7 +34,7 @@ def _load_config(path=OTS_PATH):
     return config
 
 
-def _save_config(config, path=OTS_PATH):
+def _save_config(config, path):
     config_path = Path(path)
     ensure_path(config_path)
 
@@ -61,38 +63,42 @@ def ots_filestore(obj):
 
 @click.group()
 @click.version_option()
+@click.option(
+    "-c", "--config-dir",
+    type=click.Path(),
+    default=DEFAULT_APP_DIR,
+    show_default=True,
+    help=f"The path to the directory containing the configuration files and "
+         f"filestore. Will be created if it does not exist.",
+)
 @click.pass_context
-def cli(ctx):
+def cli(ctx, config_dir):
     """ Simple tool to record your time usage and send it to Odoo. """
 
-    # This is here because I haven't given the slightest thought to what
-    # the file system should look like on a Windows machine.
-    os_name = os.name
-    if os_name != 'posix':  # TODO: This should probably just be a setting on setup.py
-        raise click.ClickException(
-            f"Unexpected operating system. Expected 'posix' got {os_name}."
-        )
-
-    config = _load_config()
-    filestore_file_name = config.get('filestore', DEFAULT_FILESTORE_FILE_NAME)
-
-    # Make sure the directory path for `.ots` exists.
-    ots_path = Path(OTS_PATH)
-    ensure_path(ots_path)
-
-    file_storage = FileStorage.FileStorage(str(ots_path / filestore_file_name))
-    db = DB(file_storage)
-    with db.transaction() as connection:
-        if not hasattr(connection.root, 'timesheet_storage'):
-            connection.root.timesheet_storage = TimesheetFileStore()
+    config, db = _do_setup(config_dir)
 
     # Tell the context to close the database when the context tears down.
     ctx.call_on_close(db.close)
 
     # Database and config to context for sub commands
     ctx.ensure_object(dict)
+    ctx.obj['config_dir'] = config_dir
     ctx.obj['db'] = db
     ctx.obj['config'] = config
+
+
+def _do_setup(config_dir):
+    config = _load_config(config_dir)
+    filestore_file_name = config.get('filestore', DEFAULT_FILESTORE_FILE_NAME)
+    # Make sure the directory path for `.ots` exists.
+    ots_path = Path(config_dir)
+    ensure_path(ots_path)
+    file_storage = FileStorage.FileStorage(str(ots_path / filestore_file_name))
+    db = DB(file_storage)
+    with db.transaction() as connection:
+        if not hasattr(connection.root, 'timesheet_storage'):
+            connection.root.timesheet_storage = TimesheetFileStore()
+    return config, db
 
 
 @cli.command()
@@ -435,7 +441,7 @@ def login(obj, database):
         'odoo_port': port,
         'odoo_db': database,
     })
-    _save_config(config)
+    _save_config(config, obj['config_dir'])
 
     with ots_filestore(obj) as timesheet_storage:
         user_id = timesheet_storage.login(
@@ -493,7 +499,7 @@ def setup(obj, advanced):
         config_values['filestore'] = filestore
 
     config.update(config_values)
-    _save_config(config)
+    _save_config(config, obj['config_dir'])
 
 
 @cli.command()
