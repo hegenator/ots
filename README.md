@@ -308,7 +308,7 @@ timesheet to another.
 
 ### ots alias, the answer to "What to do with often recurring tasks"
 
-To handle often recurring tasks, such as dailies, `ots` offers the `alias` command.
+To handle often recurring tasks, such as dailies, `ots` offers the `alias` command group.
 
 To create an alias, you simply provide the alias a name, and then fill in the same information you would 
 when starting a timesheet.
@@ -316,19 +316,19 @@ This is especially useful if you have recurring tasks that don't actually have a
 to create timesheet entries directly on a project. This avoids having to type the `--project-id` option 
 for `ots start`.
 ```
-➜  ~ ots alias daily T1324 -m "Daily peer review"
+➜  ~ ots alias add daily T1324 -m "Daily peer review"
 Alias daily added.
-➜  ~ ots alias coffee -m "Coffee break" --project_id=125
+➜  ~ ots alias add coffee -m "Coffee break" --project_id=125
 Alias coffee added.
 ```
 
-To list existing aliases, simply call `alias` without any arguments.
+To list existing aliases, a `list` subcommand can be used (or call `alias` without any arguments)
 ```
-➜  ~ ots alias
+➜  ~ ots alias list
 Alias    Task Code    Description        Title    Project
 -------  -----------  -----------------  -------  ---------
-coffee                Coffee break
-daily    T1324        Daily peer review
+coffee                Coffee break                Caffeine consumption
+daily    T1324        Daily peer review  Dailies  Recurring internal meetings
 ```
 
 To use an alias, simply provide the name of the alias in place of a task code when using 
@@ -339,8 +339,9 @@ To use an alias, simply provide the name of the alias in place of a task code wh
 Timesheet started: T1324, Daily peer review
 ```
 
-It is currently not possible to remove aliases, but you can redefine an alias already in use 
-to override it with a new one.
+To remove an existing alias, `ots alias delete <alias name>`, or if you only wish to correct 
+a mistake in an existing alias, you can just redefine it with the correct information to override 
+the existing alias.
 
 
 
@@ -349,7 +350,7 @@ This is a list of known shortcoming or bugs.
 
 * OTS does not track the possible differences of timesheets between Odoo and the local filestore
   * listing will only show (with color codes) if a timesheet has been pushed to Odoo or not. It does 
-  not case if they are out of sync, or even if the timesheet no longer exists in Odoo.
+  not care if they are out of sync, or even if the timesheet no longer exists in Odoo.
   * There is no conflict detection or resolution. It is currently completely the users responsibility to 
   make sure it is safe to push the timesheets, if the user was to push timesheets that have already been pushed previously.
   * OTS does not fetch timesheets from Odoo that were added there manually.
@@ -362,15 +363,13 @@ OTS and Odoo will become. This is mainly a visual issue only but can be confusin
 totals shown by OTS and Odoo.
 * `update` could use a combination of improvements, mostly to do with how it handles cases where task code is not given 
 and it should rely on a task_id or project_id instead. It fetches less information than it in theory has access to.
-* `update` is automatically run only when a timesheet is created. If a timesheet is edited, the user needs to 
-manually call `ots update` for that timesheet to see the correct project and task titles.
 * It is not possible to empty a field using `ots edit`. Currently the workaround to this is to create 
 a new timesheet with the correct values and move the duration from the original timesheet to the new one, and then 
 drop the old timesheet.
 * Some output formatting issues that causes less than pretty stacks of tables, mostly when printing multiple days worth 
 of timesheets with vastly different lengths in the project name, task name and description columns.
 * Some commands don't offer all the possible options the filestore would allow. 
-* Aliases don't fetch data from Odoo at all, yet.
+* Aliases have the same shortcomings as tasks, when it comes to updating the data from Odoo.
 * Some exception handling cases are still less than useful. `except: print("Shit hit the fan yo")`
 * It should be possible to erase all login session with one command. Currently `logout` only erases the 
 most recently used credentials, if saved.
@@ -380,5 +379,4 @@ when an action requiring the connection is given.
 the TimesheetStorage from one version to another. This shouldn't be more difficult to making a copy of the filestore file.
 * The code is a mess
 * The documentation is a mess
-* The git history is a mess
 * And probably a lot more that I'm not currently remembering.
