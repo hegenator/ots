@@ -5,11 +5,9 @@ A worktime tracker that attempts to be less shit than Awesome Timesheets.
 ## Getting started
 
 ### Installation
-Currently supports Mac and Linux (at least most of them?). Trying to run `ots` on any other 
-operating system will cause an error, by design. Since the tool has not been tested on any other 
-type of system, and there is no guarantee it would work at all on, for example, Windows, and thus 
-no risks are taken.
-
+`ots` has been used mostly on Mac OS and Linux operating systems. The limited amount of unit tests 
+that currently exist seem to indicate that it also works on Windows, but I have no first hand 
+proof or experiences to back that up. It will probably work fine...
 
 Use `pip` to install `ots`. `ots` requires Python>=3.6, so depending on your 
 Python installation you probably need to use `pip3`.
@@ -33,11 +31,7 @@ For example, to install version `v0.3`
 pip3 install --user --upgrade git+https://github.com/hegenator/ots@v0.3
 ```
 
-
 ### Install from local repository
-This is currently the recommended way of installation, since as of writing this, the `master`
-branch is still empty, and the repository is probably evolving quite often.
-
 Clone the repository locally, and install from that local repository
 ```
 git clone https://github.com/hegenator/ots.git
