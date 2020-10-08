@@ -13,7 +13,7 @@ from collections import defaultdict
 from .helpers import format_timedelta
 from .timesheet import TimeSheet
 from .timesheet_alias import TimeSheetAlias
-from .helpers import apply_duration_string, limit_str_length
+from .helpers import apply_duration_string, limit_str_length, float_hours_to_duration_string
 from .__about__ import __version__
 
 
@@ -581,21 +581,45 @@ class TimesheetFileStore(Persistent):
             # read always returns id, even if we don't ask for it, but we use it as a header
             # so simpler to include it here and reuse the fields-list as the table headers
             task_fields = [
+                "id",
                 "code",
                 "name",
                 "project_id",
                 "stage_id",
-                "id",
             ]
-            task_vals = odoo.env['project.task'].browse(task_ids).read(task_fields)
+            duration_fields = [
+                "planned_hours",
+                "total_hours_spent",
+            ]
+
+            def format_task_duration(data):
+                planned_hours = data["planned_hours"]
+                effective_hours = data["total_hours_spent"]
+                # Compute our own progress since the one computed by Odoo caps at 100%
+                progress_percent = effective_hours / planned_hours if planned_hours else 0.0
+
+                planned_formatted = float_hours_to_duration_string(planned_hours)
+                effective_formatted = float_hours_to_duration_string(effective_hours)
+                progress_formatted = f"{round(progress_percent * 100)}%"
+
+                # If we have no planned hours, dim the numbers a bit
+                if not planned_hours:
+                    planned_formatted = click.style(planned_formatted, fg='black')
+                    progress_formatted = click.style(progress_formatted, fg='black')
+
+                return f"{effective_formatted} / {planned_formatted} ({progress_formatted})"
+
+            task_vals = odoo.env['project.task'].browse(task_ids).read(task_fields + duration_fields)
             table = [
                 [
                     limit_str_length(data[field]) for field in task_fields
-                ]
+                ] + [format_task_duration(data)]
                 for data in task_vals
             ]
+
+            headers = task_fields + ["Progress (total / planned)"]
             ttitle = click.style("Tasks:", fg='green', bold=True)
-            ttable = tabulate(table, headers=task_fields)
+            ttable = tabulate(table, headers=headers)
             task_result = f"{ttitle}\n{ttable}"
             result_strings.append(task_result)
 

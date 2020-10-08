@@ -59,3 +59,8 @@ def limit_str_length(value, max_len=50):
     if len(value) > max_len:
         return f"{value[:max_len - 3]}..."
     return value
+
+
+def float_hours_to_duration_string(hours):
+    duration = datetime.timedelta(hours=hours)
+    return format_timedelta(duration)
