@@ -8,12 +8,12 @@ from persistent import Persistent
 from BTrees.IOBTree import IOBTree
 from BTrees.OOBTree import OOBTree
 from tabulate import tabulate
-from collections import defaultdict
 
 from .helpers import format_timedelta
 from .timesheet import TimeSheet
 from .timesheet_alias import TimeSheetAlias
-from .helpers import apply_duration_string, limit_str_length, float_hours_to_duration_string
+from .helpers import apply_duration_string, limit_str_length, float_hours_to_duration_string, \
+    get_terminal_width, BLOCK_FULL, BLOCK_LIGHT_SHADE, ARROW_DOWN
 from .__about__ import __version__
 
 
@@ -645,3 +645,146 @@ class TimesheetFileStore(Persistent):
         timesheet = self.get_timesheet_by_index(index)
         # TODO: Create a mass-update version with date-ranges or something.
         timesheet.update(self)
+
+    def odoo_print_project_planning(self):
+        """
+        This is sort of what we're trying to get as the output
+        Forecasts                   1.4.                                                     30.4.
+                                    ------------- ↓ ----------------------------------------------
+        FooBar Product Development  ██████████████████████████░░░░░░░░░░░░░                        45/60 (75%)
+        Coffee Breaks               ███████████████████████████████████████                        150/100 (150%)
+        Beer Tasting                █████████████
+        Ineffective (1.4. - 30.4.)
+        """
+        odoo = self.load_odoo_session()
+        employee_id = odoo.env['hr.employee'].search([('user_id', '=', odoo.env.uid)], limit=1)
+        if not employee_id:
+            click.echo("No employee found.")
+
+        now = datetime.datetime.utcnow()
+        planning_slot_domain = [
+            ('employee_id', '=', employee_id),
+            ('start_datetime', '<=', now.isoformat()),
+            ('end_datetime', '>=', now.isoformat()),
+        ]
+        planning_slot_ids = odoo.env['planning.slot'].search(planning_slot_domain)
+        if not planning_slot_ids:
+            click.echo("No current forecasts.")
+
+        # Assume there are few enough planning slots that it is not terribly
+        # inefficient to just browse them.
+        planning_slots = odoo.env['planning.slot'].browse(planning_slot_ids)
+
+
+        # TODO: Not sure how we are going to calculate this, if at all?
+        ineffective_hours = 0.0  # The amount of hours not in the plans
+
+        def get_planning_slot_description(planning_slot):
+            return planning_slot.task_id.name or planning_slot.project_id.name or r"¯\_(ツ)_/¯"
+
+        earliest_date = min(pl.start_datetime.date() for pl in planning_slots)
+        latest_date = max(pl.end_datetime.date() for pl in planning_slots)
+        max_name_width = max(len(get_planning_slot_description(pl)) for pl in planning_slots)
+
+        # Determine the width of the terminal to get an idea of how wide we can make the output.
+        total_width = get_terminal_width()
+
+        # Allocate 15 characters for the numbers display.
+        # This is the amount of space the format "150/100 (150%)" takes assuming
+        # all of the numbers are at most three digits, plus one space for padding.
+        numbers_width = 15
+
+        # Cap the width of the description column to a third of the total width
+        max_description_column_width = total_width // 3
+        max_description_length = max_description_column_width - 2
+        description_width = min(max_description_length, max_name_width)
+        description_column_width = description_width + 2
+
+        # Calculate the amount of days we have to include in the bar.
+        total_days = (latest_date - earliest_date).days + 1  # +1 for inclusive "range"
+        max_bar_width = total_width - description_column_width - numbers_width
+        # The width of a full day. Cap at 3 characters to not make the bars unnecessarily
+        # fill the full width of the screen even if there would be infinite space.
+        # TODO: This should probably not be limited like this, since if the plans are short
+        #  the bar might be unnecessarily small. Possibly an absolute character limit instead?
+        #  This was tested with a nice 30 day forecast.
+        blocks_per_day = min(max_bar_width // total_days, 3)
+        bar_display_width = blocks_per_day * total_days
+
+        rows = []
+
+        # Dates row
+        # The formatting directives for strftime() are not the same for all platforms.
+        # We want to get rid of the leading zeros to make the date use as little space
+        # as possible, and the easiest way to do that with strftime() is not the same
+        # for all different platforms, so do this formatting the hard way.
+        start_date_stamp = f"{earliest_date.day}.{earliest_date.month}."
+        end_date_stamp = f"{latest_date.day}.{latest_date.month}."
+        padding = bar_display_width - len(end_date_stamp)
+        title_row = f"{' ' * description_column_width}{start_date_stamp: <{padding}}{end_date_stamp}"
+        rows.append(title_row)
+
+        # Separator and "today" pointer
+        today = datetime.date.today()
+        today_position = (today - earliest_date).days * blocks_per_day
+        # Try to get the arrow about in the middle of the day depending on the
+        # width of a single day on the bar.
+        today_position += blocks_per_day // 2
+        # We add one character of empty space between the arrow and the separator to make it
+        # more easily visible. This also reduces the start point of the arrow part by
+        # one, unless we are already at the start of the bar (position is 0).
+        # If today is at the start of the bar, remove the left side padding.
+        arrow = f" {ARROW_DOWN} "
+        if today_position == 0:
+            arrow = arrow[1:]
+        else:
+            today_position -= 1
+
+        separator_character = "-"
+        separator_start_width = today_position
+        separator_end_width = bar_display_width - separator_start_width - len(arrow)
+        separator_start = separator_character * separator_start_width
+        separator_end = separator_character * separator_end_width
+        separator_row = f"{' ' * description_column_width}{separator_start}{arrow}{separator_end}"
+
+        rows.append(separator_row)
+
+        # Draw the bars for the project plan slots
+        for planning_slot in planning_slots:
+            name = planning_slot.task_id.name or planning_slot.project_id.name or r"¯\_(ツ)_/¯"
+            progress = planning_slot.percentage_hours or 0.0
+            effective_hours = planning_slot.effective_hours
+            allocated_hours = planning_slot.allocated_hours
+            start = planning_slot.start_datetime.date()
+            end = planning_slot.end_datetime.date()
+            planning_days = (end - start).days + 1  # inclusive days
+
+            # Format the row
+            row_template = "{desc: <{desc_width}}{lpad}{full}{light}{rpad} " \
+                           "{effective}/{allocated} ({progress}%)"
+
+            bar_left_padding = (start - earliest_date).days * blocks_per_day
+            bar_right_padding = (latest_date - end).days * blocks_per_day
+            full_blocks_width = round(planning_days * progress) * blocks_per_day
+            light_blocks_width = (planning_days - round(planning_days * progress)) * blocks_per_day
+
+            # Add some nice colors to bars. Red if over estimate, otherwise green.
+            colour = "green" if progress < 1.00 else "red"
+            full_blocks = click.style(BLOCK_FULL * full_blocks_width, fg=colour)
+            light_blocks = click.style(BLOCK_LIGHT_SHADE * light_blocks_width, fg=colour)
+
+            row = row_template.format(
+                desc=limit_str_length(name, max_len=max_description_length),
+                desc_width=description_column_width,
+                lpad=" " * bar_left_padding,
+                rpad=" " * bar_right_padding,
+                full=full_blocks,
+                light=light_blocks,
+                effective=round(effective_hours),
+                allocated=round(allocated_hours),
+                progress=round(progress*100),
+            )
+            rows.append(row)
+
+        for row in rows:
+            click.echo(row)

@@ -197,6 +197,29 @@ def edit(obj, index, description, duration, code, task_id, project_id):
 
 @cli.command()
 @click.pass_obj
+@click.argument('duration')
+@click.argument('index_from')
+@click.argument('index_to')
+def transfer(obj, duration, index_from, index_to):
+    """
+    Transfer duration from timesheet to another
+    :param obj:
+    :param duration:
+    :param index_from:
+    :param index_to:
+    :return:
+    """
+    with ots_filestore(obj) as timesheet_storage:
+        # edit negative duration on index_from
+        # If successful, edit positive duration on index_to
+        # if successful, print a success message
+        # If anything fails, roll back the transaction probably
+        # by raising an exception about the failure.
+        pass
+
+
+@cli.command()
+@click.pass_obj
 @click.argument('index')
 @click.option('-f', '--force', is_flag=True)
 def drop(obj, index, force):
@@ -407,6 +430,16 @@ def list_timesheets(obj, days, date):
         for days in reversed(range(0, days)):
             date_to_list = date_obj - relativedelta.relativedelta(days=days)
             timesheet_storage.print_date(date_to_list)
+
+
+@cli.command()
+@click.pass_obj
+def planning(obj):
+    """
+    Print summary of your project planning status
+    """
+    with ots_filestore(obj) as timesheet_storage:
+        timesheet_storage.odoo_print_project_planning()
 
 
 @cli.command()

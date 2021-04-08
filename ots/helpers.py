@@ -1,5 +1,12 @@
 import datetime
 import click
+import shutil
+
+BLOCK_FULL = "█"
+BLOCK_MEDIUM_SHADE = "▒"
+BLOCK_LIGHT_SHADE = "░"
+LEFT_HALF_BLOCK = "▌"
+ARROW_DOWN = "↓"
 
 
 def format_timedelta(timedelta):
@@ -64,3 +71,8 @@ def limit_str_length(value, max_len=50):
 def float_hours_to_duration_string(hours):
     duration = datetime.timedelta(hours=hours)
     return format_timedelta(duration)
+
+
+def get_terminal_width():
+    terminal_size = shutil.get_terminal_size((80, 40))
+    return terminal_size.columns

@@ -252,7 +252,9 @@ class TimeSheet(Persistent):
                 self.task_id = task_vals.get("id")
                 self.task_title = task_vals.get("name", "")
 
-                project_id, project_title = task_vals.get("project_id", (None, ""))
+                # Or-guard instead of using the (None, "") as default for the `get()`
+                # in case Odoo returns False as the project_id...
+                project_id, project_title = task_vals.get("project_id") or (None, "")
                 self.project_id = project_id
                 self.project_title = project_title
         elif self.project_id:
