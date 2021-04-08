@@ -436,7 +436,31 @@ def list_timesheets(obj, days, date):
 @click.pass_obj
 def planning(obj):
     """
-    Print summary of your project planning status
+    Print summary of your project planning status.
+
+    Shows all the planning slots that are in effect now.
+    The full width of the bar indicates the duration of the planning slot in relation
+    to the dates shown at the top. The darker part of the bar indicates the progress
+    of the effective hours, such that when the full allocated hours have been reached
+    the bar is full. If the effective hours exceeds the planned hours, the bar turns
+    from green to red (the author has made an assumption that going over the allocated
+    hours is more of a problem than not reaching the allocated hours...).
+
+    On the right of the bar effective hours in relation to allocated hours are shown,
+    and the progress percentage (effective/allocated).
+
+    An arrow at the top of the bars points at today, which can be used as a reference
+    to estimate the progress of the effective hours in relation to time.
+
+    At the bottom is a an approximation of the "ineffecttive hours". This number is potentially
+    very inaccurate, so don't make any grand decisions based on this number. The ineffective
+    hours is simply the total hours on all timesheets recorded during any of the currently active
+    planning slots minus the effective hours on those planning slots. This means the number
+    is most accurate when all of the current plans start and end at the same time, and when
+    there are no other planning slots that overlap with any of current plans at either end.
+
+    This summary draws all of its data from Odoo when called, and thus does not take
+    into consideration any unpushed timesheets not yet recorded in Odoo.
     """
     with ots_filestore(obj) as timesheet_storage:
         timesheet_storage.odoo_print_project_planning()

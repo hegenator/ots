@@ -675,12 +675,11 @@ class TimesheetFileStore(Persistent):
         # inefficient to just browse them.
         planning_slots = odoo.env['planning.slot'].browse(planning_slot_ids)
 
-
-        # TODO: Not sure how we are going to calculate this, if at all?
-        ineffective_hours = 0.0  # The amount of hours not in the plans
-
         def get_planning_slot_description(planning_slot):
-            return planning_slot.task_id.name or planning_slot.project_id.name or r"¯\_(ツ)_/¯"
+            return planning_slot.task_id.name \
+                   or planning_slot.project_id.name \
+                   or planning_slot.name \
+                   or r"¯\_(ツ)_/¯"
 
         earliest_date = min(pl.start_datetime.date() for pl in planning_slots)
         latest_date = max(pl.end_datetime.date() for pl in planning_slots)
@@ -749,9 +748,11 @@ class TimesheetFileStore(Persistent):
 
         rows.append(separator_row)
 
+        total_effective_hours = 0.0
+        total_allocated_percentage = 0.0
         # Draw the bars for the project plan slots
         for planning_slot in planning_slots:
-            name = planning_slot.task_id.name or planning_slot.project_id.name or r"¯\_(ツ)_/¯"
+            name = get_planning_slot_description(planning_slot)
             progress = planning_slot.percentage_hours or 0.0
             effective_hours = planning_slot.effective_hours
             allocated_hours = planning_slot.allocated_hours
@@ -759,13 +760,18 @@ class TimesheetFileStore(Persistent):
             end = planning_slot.end_datetime.date()
             planning_days = (end - start).days + 1  # inclusive days
 
+            total_effective_hours += effective_hours
+            total_allocated_percentage += planning_slot.allocated_percentage
+
             # Format the row
             row_template = "{desc: <{desc_width}}{lpad}{full}{light}{rpad} " \
                            "{effective}/{allocated} ({progress}%)"
 
             bar_left_padding = (start - earliest_date).days * blocks_per_day
             bar_right_padding = (latest_date - end).days * blocks_per_day
-            full_blocks_width = round(planning_days * progress) * blocks_per_day
+            # Limit the full blocks to the full width of the planning if progress goes above 100%
+            # The block will turn red once 100% is exceeded to display the planning is over estimate.
+            full_blocks_width = round(planning_days * min(progress, 1.0)) * blocks_per_day
             light_blocks_width = (planning_days - round(planning_days * progress)) * blocks_per_day
 
             # Add some nice colors to bars. Red if over estimate, otherwise green.
@@ -785,6 +791,38 @@ class TimesheetFileStore(Persistent):
                 progress=round(progress*100),
             )
             rows.append(row)
+
+        # "Ineffective" hours, so hours not in the effective hours
+        # This number is an estimation, because the "ineffective" hours
+        # depends on the point of reference since it is not a defined planning slot
+        # that has a start and end date.
+        # We are looking at all the timesheets that are recorded between
+        # the date the first planning start and when the last planning ends
+        # that are "in effect" at the moment of computation.
+        # This means we completely ignore plans that might have ended before now, but overlap
+        # with the start of still running plans.
+        # This effectively means the estimation will be better when the project plans
+        # start and end at the same dates, rather than overlapping only partially.
+
+        # TODO: This is now probably very inefficient. We could probably all
+        #  the interesting timesheet directly by using a better domain.
+        #  We can probably filter out the "effective" timesheets with the domain
+        #  and that way browse less records over the jsonrpc.
+        timesheet_ids = odoo.env['account.analytic.line'].search(
+            [
+                ('user_id', '=', odoo.env.uid),
+                ('date', '>=', earliest_date.isoformat()),
+                ('date', '<=', latest_date.isoformat()),
+            ]
+        )
+        timesheets = odoo.env['account.analytic.line'].browse(timesheet_ids)
+        total_hours = sum(timesheet.unit_amount for timesheet in timesheets)
+
+        ineffective_hours = total_hours - total_effective_hours
+        ineffective_percentage = round(ineffective_hours / total_hours * 100)
+        rows.append(f"Approx. \"Ineffective Hours\": "
+                    f"{round(ineffective_hours)}/{round(total_hours)} "
+                    f"({ineffective_percentage}% of total hours {start_date_stamp} - {end_date_stamp})")
 
         for row in rows:
             click.echo(row)
