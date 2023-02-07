@@ -37,7 +37,7 @@ class TimeSheet(Persistent):
             assert isinstance(project_id, int)
 
         if task_id is not None:
-            assert isinstance(project_id, int)
+            assert isinstance(task_id, int)
 
         self.project_id = project_id
         self.task_id = task_id
