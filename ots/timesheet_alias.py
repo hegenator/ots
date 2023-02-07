@@ -24,7 +24,7 @@ class TimeSheetAlias(Persistent):
             assert isinstance(project_id, int)
 
         if task_id is not None:
-            assert isinstance(project_id, int)
+            assert isinstance(task_id, int)
 
         self.project_id = project_id
         self.task_id = task_id
@@ -65,20 +65,24 @@ class TimeSheetAlias(Persistent):
         :param odoo: odoorpc.Odoo authenticated to a database
         """
         odoo = storage.load_odoo_session()
+
+        task_id = self.task_id
         task_code = self.task_code
-        if task_code:
+
+        if not task_id and task_code:
             task_id = storage._odoo_search_task_by_code(task_code)
-            if task_id:
-                task = odoo.env['project.task'].browse(task_id)
-                # read returns a list, but only one task so extract the dict
-                task_vals = task.read(["project_id", "name"])[0]
 
-                self.task_id = task_vals.get("id")
-                self.task_title = task_vals.get("name", "")
+        if task_id:
+            task = odoo.env['project.task'].browse(task_id)
+            # read returns a list, but only one task so extract the dict
+            task_vals = task.read(["project_id", "name"])[0]
 
-                project_id, project_title = task_vals.get("project_id", (None, ""))
-                self.project_id = project_id
-                self.project_title = project_title
+            self.task_id = task_vals.get("id")
+            self.task_title = task_vals.get("name", "")
+
+            project_id, project_title = task_vals.get("project_id", (None, ""))
+            self.project_id = project_id
+            self.project_title = project_title
         elif self.project_id:
             project = odoo.env['project.project'].browse(self.project_id)
             self.project_title = project.name
@@ -87,4 +91,3 @@ class TimeSheetAlias(Persistent):
             # TODO: Later, we would like to upgrade some information on the timesheet
             #  even though we didn't have the task code, if we have task_id or project_id instead
             click.echo("Alias has no task code or project_id, information not updated.")
-
